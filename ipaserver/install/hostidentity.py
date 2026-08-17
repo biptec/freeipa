@@ -185,9 +185,11 @@ def transition_host_entry(
     source_principal = _host_principal(source_hostname, realm)
     target_principal = _host_principal(target_hostname, realm)
     principals = list(entry.get('krbprincipalname', ()))
+    principal_names = {str(value) for value in principals}
     for principal in (source_principal, target_principal):
-        if principal not in principals:
+        if principal not in principal_names:
             principals.append(principal)
+            principal_names.add(principal)
 
     entry['krbprincipalname'] = principals
     entry['krbcanonicalname'] = [target_principal]
@@ -241,7 +243,8 @@ def _add_service_principal_aliases(
             )
         entry = entries[0]
         principals = list(entry.get('krbprincipalname', ()))
-        if alias not in principals:
+        principal_names = {str(value) for value in principals}
+        if alias not in principal_names:
             principals.append(alias)
             entry['krbprincipalname'] = principals
             ldap.update_entry(entry)
@@ -335,11 +338,12 @@ def verify_machine_identity(
     entry = ldap.get_entry(_host_dn(system_hostname, api_instance))
     target_principal = _host_principal(system_hostname, realm)
     ipa_principal = _host_principal(ipa_hostname, realm)
-    principals = entry.get('krbprincipalname', ())
+    principals = {str(value) for value in entry.get('krbprincipalname', ())}
 
     if target_principal not in principals or ipa_principal not in principals:
         raise RuntimeError('Host principal aliases are incomplete')
-    if entry.single_value.get('krbcanonicalname') != target_principal:
+    canonical = entry.single_value.get('krbcanonicalname')
+    if canonical is None or str(canonical) != target_principal:
         raise RuntimeError('System host principal is not canonical')
     if entry.single_value.get('fqdn') != system_hostname:
         raise RuntimeError('Host entry FQDN was not finalized')

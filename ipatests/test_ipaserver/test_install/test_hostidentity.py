@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 
 from ipalib import errors
+from ipapython.kerberos import Principal
 from ipaserver.install import hostidentity
 
 
@@ -266,3 +267,20 @@ def test_validate_distinct_service_subnets_accepts_distinct_networks():
 
     hostidentity.validate_distinct_service_subnets(
         addresses[:2], addresses[2:])
+
+
+def test_verify_machine_identity_accepts_typed_principals():
+    target = f'host/{SYSTEM_HOST}@{REALM}'
+    source = f'host/{IPA_HOST}@{REALM}'
+    entry = MagicMock()
+    entry.get.return_value = [Principal(source), Principal(target)]
+    entry.single_value = {
+        'krbcanonicalname': Principal(target),
+        'fqdn': SYSTEM_HOST,
+    }
+    api_instance = MagicMock()
+    api_instance.Backend.ldap2.get_entry.return_value = entry
+
+    with patch.object(hostidentity, '_host_dn', return_value='host-dn'):
+        hostidentity.verify_machine_identity(
+            IPA_HOST, SYSTEM_HOST, REALM, api_instance=api_instance)
