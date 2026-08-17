@@ -204,3 +204,42 @@ def test_service_owner_uses_ipa_host_before_finalization():
 
     owner = svc._managed_host_dn()
     assert owner[0]['fqdn'] == 'ipa.example.test'
+
+
+def test_ds_split_bootstrap_generates_prestart_helper(tmp_path):
+    ds = object.__new__(dsinstance.DsInstance)
+    ds.serverid = 'EXAMPLE-TEST'
+    ds.fqdn = 'ipa.example.test'
+    libexec = tmp_path / 'libexec'
+    systemd = tmp_path / 'systemd'
+
+    with patch.object(dsinstance, 'api') as api_mock, \
+            patch.object(dsinstance, 'tasks') as tasks_mock, \
+            patch.object(dsinstance.paths, 'LIBEXEC_IPA_DIR', str(libexec)), \
+            patch.object(
+                dsinstance.paths, 'ETC_SYSTEMD_SYSTEM_DIR', str(systemd)):
+        api_mock.env.ipa_ipv4_address = '10.0.0.10'
+        api_mock.env.ipa_ipv6_address = '2001:db8:1::10'
+        api_mock.env.dns_hostname = 'dns.example.test'
+        api_mock.env.dns_ipv4_address = '10.0.1.53'
+        api_mock.env.dns_ipv6_address = '2001:db8:2::53'
+
+        ds.configure_split_network_bootstrap()
+
+    helper = libexec / 'ipa-split-network-ready-EXAMPLE-TEST'
+    dropin = (
+        systemd / 'dirsrv@EXAMPLE-TEST.service.d' /
+        'ipa-split-network.conf')
+    helper_text = helper.read_text()
+    dropin_text = dropin.read_text()
+
+    assert 'ensure_host 10.0.0.10 ipa.example.test ipa' in helper_text
+    assert 'ensure_host 2001:db8:1::10 ipa.example.test ipa' in helper_text
+    assert 'ensure_host 10.0.1.53 dns.example.test dns' in helper_text
+    assert 'wait_address 10.0.0.10' in helper_text
+    assert 'wait_address 2001:db8:1::10' in helper_text
+    assert 'ReadWritePaths=/etc/hosts' in dropin_text
+    assert 'TimeoutStartSec=180' in dropin_text
+    assert 'ExecStartPre={0}'.format(helper) in dropin_text
+    assert helper.stat().st_mode & 0o111
+    tasks_mock.systemd_daemon_reload.assert_called_once_with()
