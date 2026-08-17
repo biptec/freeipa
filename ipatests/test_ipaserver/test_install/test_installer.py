@@ -113,6 +113,21 @@ class TestServerInstaller(InstallerTestBase):
         assert opts.ipa_hostname == 'ipa.example.test'
         assert opts.host_name == 'node.example.test'
 
+    def test_split_service_network_options(self):
+        opts, _args = self.parse_cli_args(
+            '--ipa-hostname ipa.example.test '
+            '--hostname node.example.test '
+            '--directory-ip-address 10.16.16.90 '
+            '--directory-ip-address 2a07:e580:a10:1058::2 '
+            '--dns-hostname dns.example.test '
+            '--dns-ip-address 10.16.16.53 '
+            '--dns-ip-address 2a07:e580:a10:1034::2')
+        assert [str(ip) for ip in opts.ip_addresses] == [
+            '10.16.16.90', '2a07:e580:a10:1058::2']
+        assert opts.dns_hostname == 'dns.example.test'
+        assert [str(ip) for ip in opts.dns_ip_addresses] == [
+            '10.16.16.53', '2a07:e580:a10:1034::2']
+
 
 class TestReplicaInstaller(InstallerTestBase):
     tested_cls = ReplicaInstall
@@ -123,6 +138,21 @@ class TestReplicaInstaller(InstallerTestBase):
             '--hostname node.example.test')
         assert opts.ipa_hostname == 'ipa.example.test'
         assert opts.host_name == 'node.example.test'
+
+    def test_split_service_network_options(self):
+        opts, _args = self.parse_cli_args(
+            '--ipa-hostname ipa.example.test '
+            '--hostname node.example.test '
+            '--directory-ip-address 10.16.18.90 '
+            '--directory-ip-address 2a07:e580:a10:1258::2 '
+            '--dns-hostname dns2.example.test '
+            '--dns-ip-address 10.16.18.53 '
+            '--dns-ip-address 2a07:e580:a10:1234::2')
+        assert [str(ip) for ip in opts.ip_addresses] == [
+            '10.16.18.90', '2a07:e580:a10:1258::2']
+        assert opts.dns_hostname == 'dns2.example.test'
+        assert [str(ip) for ip in opts.dns_ip_addresses] == [
+            '10.16.18.53', '2a07:e580:a10:1234::2']
 
     PASSWORD = Keyval("auto_password",
                       "c3ca2246bcf309d1b636581ce429da3522a8aec4")
