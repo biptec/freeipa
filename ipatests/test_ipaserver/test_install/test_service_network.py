@@ -107,3 +107,21 @@ def test_ds_split_listener_restart_skips_localhost_port_probe():
     restart.assert_called_once_with()
     ldap.disconnect.assert_not_called()
     ldap.connect.assert_not_called()
+
+
+def test_httpd_split_endpoint_pins_ipa_service_server_name():
+    with patch.object(httpinstance, 'api') as api_mock:
+        api_mock.env.system_hostname = 'node.example.test'
+        directive = (
+            httpinstance.HTTPInstance._split_httpd_server_name_directive(
+                'ipa.example.test'))
+    assert directive == 'ServerName ipa.example.test'
+
+
+def test_httpd_normal_mode_does_not_add_server_name():
+    with patch.object(httpinstance, 'api') as api_mock:
+        api_mock.env.system_hostname = None
+        directive = (
+            httpinstance.HTTPInstance._split_httpd_server_name_directive(
+                'ipa.example.test'))
+    assert directive == ''

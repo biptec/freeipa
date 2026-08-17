@@ -1707,6 +1707,8 @@ def upgrade_configuration():
         DOMAIN=api.env.domain,
         HTTPD_LISTEN_DIRECTIVES=(
             httpinstance.HTTPInstance._split_httpd_listen_directives()),
+        HTTPD_SERVER_NAME_DIRECTIVE=(
+            httpinstance.HTTPInstance._split_httpd_server_name_directive(fqdn)),
     )
 
     if getattr(api.env, 'ipa_ipv4_address', None):

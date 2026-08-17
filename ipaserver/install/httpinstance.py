@@ -111,6 +111,8 @@ class HTTPInstance(service.Service):
             WSGI_PREFIX_DIR=paths.WSGI_PREFIX_DIR,
             WSGI_PROCESSES=constants.WSGI_PROCESSES,
             HTTPD_LISTEN_DIRECTIVES=self._split_httpd_listen_directives(),
+            HTTPD_SERVER_NAME_DIRECTIVE=(
+                self._split_httpd_server_name_directive(fqdn)),
         )
         self.ca_file = ca_file
         if ca_is_configured is not None:
@@ -152,6 +154,12 @@ class HTTPInstance(service.Service):
         self.step("enabling oddjobd", self.enable_and_start_oddjobd)
 
         self.start_creation()
+
+    @staticmethod
+    def _split_httpd_server_name_directive(fqdn=None):
+        if not getattr(api.env, 'system_hostname', None):
+            return ''
+        return 'ServerName {0}'.format(fqdn or api.env.host)
 
     @staticmethod
     def _split_httpd_listen_directives():
