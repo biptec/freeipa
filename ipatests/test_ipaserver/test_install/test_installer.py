@@ -11,6 +11,7 @@ import pytest
 
 from ipatests.util import assert_equal
 from ipaserver.install.ipa_replica_install import ReplicaInstall
+from ipaserver.install.ipa_server_install import ServerInstall
 
 Keyval = namedtuple('Keyval', ['option', 'value'])
 
@@ -102,8 +103,26 @@ class InstallerTestBase(metaclass=ABCMeta):
         return ret
 
 
+class TestServerInstaller(InstallerTestBase):
+    tested_cls = ServerInstall
+
+    def test_split_hostname_options(self):
+        opts, _args = self.parse_cli_args(
+            '--ipa-hostname ipa.example.test '
+            '--hostname node.example.test')
+        assert opts.ipa_hostname == 'ipa.example.test'
+        assert opts.host_name == 'node.example.test'
+
+
 class TestReplicaInstaller(InstallerTestBase):
     tested_cls = ReplicaInstall
+
+    def test_split_hostname_options(self):
+        opts, _args = self.parse_cli_args(
+            '--ipa-hostname ipa.example.test '
+            '--hostname node.example.test')
+        assert opts.ipa_hostname == 'ipa.example.test'
+        assert opts.host_name == 'node.example.test'
 
     PASSWORD = Keyval("auto_password",
                       "c3ca2246bcf309d1b636581ce429da3522a8aec4")
