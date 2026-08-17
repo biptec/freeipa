@@ -104,6 +104,6 @@ def test_ds_split_listener_restart_skips_localhost_port_probe():
 
     assert entry['nsslapd-listenhost'] == ['ipa.example.test']
     assert entry['nsslapd-securelistenhost'] == ['ipa.example.test']
-    restart.assert_called_once_with(wait=False)
+    restart.assert_called_once_with()
     ldap.disconnect.assert_not_called()
     ldap.connect.assert_not_called()

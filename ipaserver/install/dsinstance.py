@@ -243,11 +243,10 @@ class DsInstance(service.Service):
         except errors.EmptyModlist:
             return
 
-        # Generic systemd service waits probe LDAP on localhost. Split-mode
-        # intentionally removes loopback TCP listeners, so skip that probe.
-        # DsInstance.restart() still verifies the systemd unit and reconnects
-        # the IPA backend over its configured LDAPI socket.
-        self.restart(wait=False)
+        # RedHatDirectoryService switches readiness checks to the instance
+        # LDAPI socket in split-hostname mode, so normal restart semantics are
+        # safe even though loopback TCP listeners are intentionally absent.
+        self.restart()
 
     def __common_setup(self):
 
