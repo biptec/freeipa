@@ -208,6 +208,20 @@ def install_check(standalone, api, replica, options, hostname):
     global ip_addresses
     global reverse_zones
     fstore = sysrestore.FileStore(paths.SYSRESTORE)
+    dns_hostname = (
+        getattr(options, 'dns_hostname', None) or
+        getattr(api.env, 'dns_hostname', None) or
+        hostname
+    )
+    stored_dns_addresses = [
+        getattr(api.env, 'dns_ipv4_address', None),
+        getattr(api.env, 'dns_ipv6_address', None),
+    ]
+
+    if options.dns_over_tls and dns_hostname != hostname:
+        raise RuntimeError(
+            'DNS over TLS with a separate DNS hostname is not supported by '
+            'split-hostname mode yet')
 
     package_check(RuntimeError)
 
@@ -227,7 +241,7 @@ def install_check(standalone, api, replica, options, hostname):
                                "properly delegated to this IPA server.",
                                e)
             else:
-                hst = dnsutil.DNSName(hostname).make_absolute().to_text()
+                hst = dnsutil.DNSName(dns_hostname).make_absolute().to_text()
                 if hst not in e.kwargs['ns']:
                     raise ValueError(str(e))
 
@@ -357,10 +371,18 @@ def install_check(standalone, api, replica, options, hostname):
                 "the original kasp.db file." %
                 ", ".join([str(zone) for zone in dnssec_zones]))
 
-    ip_addresses = get_server_ip_address(hostname, options.unattended,
-                                         True, options.ip_addresses)
-
-    util.no_matching_interface_for_ip_address_warning(ip_addresses)
+    explicit_dns_addresses = getattr(options, 'dns_ip_addresses', None)
+    if explicit_dns_addresses:
+        ip_addresses = list(explicit_dns_addresses)
+    elif all(stored_dns_addresses):
+        ip_addresses = [
+            ipautil.CheckedIPAddress(address)
+            for address in stored_dns_addresses
+        ]
+    else:
+        ip_addresses = get_server_ip_address(
+            hostname, options.unattended, True, options.ip_addresses)
+        util.no_matching_interface_for_ip_address_warning(ip_addresses)
 
     if not options.forward_policy:
         # user did not specify policy, derive it: default is 'first' but
@@ -402,8 +424,14 @@ def install_check(standalone, api, replica, options, hostname):
     else:
         reverse_zones_unattended_check = options.unattended
 
+    reverse_zone_addresses = list(ip_addresses)
+    if explicit_dns_addresses and options.ip_addresses:
+        for address in options.ip_addresses:
+            if address not in reverse_zone_addresses:
+                reverse_zone_addresses.append(address)
+
     reverse_zones = bindinstance.check_reverse_zones(
-        ip_addresses, options.reverse_zones, options,
+        reverse_zone_addresses, options.reverse_zones, options,
         reverse_zones_unattended_check, search_reverse_zones
     )
 
@@ -415,8 +443,20 @@ def install(standalone, replica, options, api=api):
     fstore = sysrestore.FileStore(paths.SYSRESTORE)
 
     if standalone:
-        # otherwise this is done by server/replica installer
-        update_hosts_file(ip_addresses, api.env.host, fstore)
+        # Otherwise this is done by the server/replica installer. In split
+        # mode never map the canonical IPA hostname to DNS endpoint addresses.
+        stored_directory_addresses = [
+            getattr(api.env, 'ipa_ipv4_address', None),
+            getattr(api.env, 'ipa_ipv6_address', None),
+        ]
+        if all(stored_directory_addresses):
+            directory_hosts_addresses = [
+                ipautil.CheckedIPAddress(address)
+                for address in stored_directory_addresses
+            ]
+        else:
+            directory_hosts_addresses = ip_addresses
+        update_hosts_file(directory_hosts_addresses, api.env.host, fstore)
 
     if os.path.isfile(paths.IPA_CA_CRT) and not options.dns_over_tls_cert:
         dot_cert = paths.BIND_DNS_OVER_TLS_CRT
@@ -451,14 +491,34 @@ def install(standalone, replica, options, api=api):
         _request_cert_for_dns_over_tls(options)
 
     bind = bindinstance.BindInstance(fstore, api=api)
-    bind.setup(api.env.host, ip_addresses, api.env.realm, api.env.domain,
+    dns_hostname = (
+        getattr(options, 'dns_hostname', None) or
+        getattr(api.env, 'dns_hostname', None) or
+        api.env.host
+    )
+    stored_directory_addresses = [
+        getattr(api.env, 'ipa_ipv4_address', None),
+        getattr(api.env, 'ipa_ipv6_address', None),
+    ]
+    if getattr(options, 'dns_ip_addresses', None) and options.ip_addresses:
+        directory_addresses = list(options.ip_addresses)
+    elif all(stored_directory_addresses):
+        directory_addresses = [
+            ipautil.CheckedIPAddress(address)
+            for address in stored_directory_addresses
+        ]
+    else:
+        directory_addresses = ip_addresses
+    bind.setup(api.env.host, directory_addresses, api.env.realm, api.env.domain,
                options.forwarders, options.forward_policy,
                reverse_zones, zonemgr=options.zonemgr,
                no_dnssec_validation=options.no_dnssec_validation,
                dns_over_tls=options.dns_over_tls,
                dns_over_tls_cert=dot_cert,
                dns_over_tls_key=dot_key,
-               dns_policy=options.dns_policy)
+               dns_policy=options.dns_policy,
+               dns_hostname=dns_hostname,
+               dns_ip_addresses=ip_addresses)
 
     if standalone and not options.unattended:
         print("")

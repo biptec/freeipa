@@ -225,6 +225,30 @@ class DsInstance(service.Service):
 
     subject_base = ipautil.dn_attribute_property('_subject_base')
 
+    def configure_split_hostname_listeners(self):
+        """Restrict LDAP/LDAPS TCP listeners to the IPA service hostname."""
+        if not (getattr(api.env, 'ipa_ipv4_address', None) and
+                getattr(api.env, 'ipa_ipv6_address', None)):
+            return
+
+        if not api.Backend.ldap2.isconnected():
+            api.Backend.ldap2.connect()
+        dn = DN('cn=config')
+        entry = api.Backend.ldap2.get_entry(
+            dn, ['nsslapd-listenhost', 'nsslapd-securelistenhost'])
+        entry['nsslapd-listenhost'] = [self.fqdn]
+        entry['nsslapd-securelistenhost'] = [self.fqdn]
+        try:
+            api.Backend.ldap2.update_entry(entry)
+        except errors.EmptyModlist:
+            return
+
+        # The active LDAPI connection is invalidated by the restart. Reconnect
+        # immediately because later installer steps continue to use ldap2.
+        api.Backend.ldap2.disconnect()
+        self.restart()
+        api.Backend.ldap2.connect()
+
     def __common_setup(self):
 
         self.step("creating directory server instance", self.__create_instance)

@@ -218,6 +218,17 @@ def create_ipa_conf(fstore, config, ca_enabled, master=None):
         ipaconf.setOption('mode', 'production')
     ]
 
+    for option_name in (
+            'system_hostname',
+            'ipa_ipv4_address',
+            'ipa_ipv6_address',
+            'dns_hostname',
+            'dns_ipv4_address',
+            'dns_ipv6_address'):
+        value = getattr(config, option_name, None)
+        if value is not None:
+            gopts.append(ipaconf.setOption(option_name, str(value)))
+
     if ca_enabled:
         gopts.extend([
             ipaconf.setOption('enable_ra', 'True'),
@@ -720,9 +731,10 @@ def ensure_enrolled(installer):
         args.append("--force-join")
     if installer.no_ntp:
         args.append("--no-ntp")
-    if installer.ip_addresses:
+    if installer.ip_addresses and not installer.ipa_hostname:
         for ip in installer.ip_addresses:
-            # installer.ip_addresses is of type [CheckedIPAddress]
+            # In split mode these are Directory Controller service addresses,
+            # not addresses of the machine identity used for client enrollment.
             args.extend(("--ip-address", str(ip)))
     if installer.ntp_servers:
         for server in installer.ntp_servers:
@@ -853,7 +865,7 @@ def _prepare_split_hostname_replica(installer, options, fstore, sstore):
 
     try:
         installutils.verify_fqdn(
-            ipa_hostname, options.no_host_dns, local_hostname=False)
+            ipa_hostname, no_host_dns=True, local_hostname=False)
     except installutils.BadHostError as e:
         raise ScriptError(e)
 
@@ -885,7 +897,7 @@ def _prepare_split_hostname_replica(installer, options, fstore, sstore):
     try:
         conn.connect(ccache=admin_ccache)
         os.environ['KRB5CCNAME'] = admin_ccache
-        hostidentity.prepare_replica_identity(
+        added_hosts_records = hostidentity.prepare_replica_identity(
             system_hostname=system_hostname,
             ipa_hostname=ipa_hostname,
             realm=client_env.realm,
@@ -894,6 +906,7 @@ def _prepare_split_hostname_replica(installer, options, fstore, sstore):
             remote_api=remote_api,
             fstore=fstore,
             sstore=sstore,
+            service_ip_addresses=options.ip_addresses,
         )
     finally:
         if conn.isconnected():
@@ -908,6 +921,7 @@ def _prepare_split_hostname_replica(installer, options, fstore, sstore):
     installer._split_ipa_hostname = ipa_hostname
     installer._split_master_hostname = client_env.server
     installer._split_realm = client_env.realm
+    installer._split_added_hosts_records = added_hosts_records
 
     # From this point the unmodified replica promotion path authenticates as
     # host/<ipa_hostname>. Populate the private host ccache immediately so
@@ -941,6 +955,7 @@ def _rollback_split_hostname_replica(installer):
             remote_api=remote_api,
             fstore=sysrestore.FileStore(paths.SYSRESTORE),
             sstore=sysrestore.StateFile(paths.SYSRESTORE),
+            added_hosts_records=installer._split_added_hosts_records,
         )
         installer._split_identity_prepared = False
     finally:
@@ -1008,10 +1023,62 @@ def promote_check(installer):
 
     fstore = sysrestore.FileStore(paths.SYSRESTORE)
 
+    if options.ipa_hostname:
+        try:
+            directory_ipv4, directory_ipv6 = (
+                hostidentity.validate_dual_stack_service_addresses(
+                    'Directory Controller', options.ip_addresses))
+        except ValueError as e:
+            raise ScriptError(e)
+        options.ip_addresses = [directory_ipv4, directory_ipv6]
+
+        if options.setup_dns:
+            if not options.dns_hostname:
+                raise ScriptError(
+                    '--dns-hostname is required with --setup-dns in '
+                    'split-hostname mode')
+            try:
+                installutils.verify_fqdn(
+                    options.dns_hostname, no_host_dns=True,
+                    local_hostname=False)
+            except installutils.BadHostError as e:
+                raise ScriptError(e)
+            options.dns_hostname = options.dns_hostname.lower()
+            try:
+                dns_ipv4, dns_ipv6 = (
+                    hostidentity.validate_dual_stack_service_addresses(
+                        'DNS service', options.dns_ip_addresses))
+            except ValueError as e:
+                raise ScriptError(e)
+            if set(options.ip_addresses).intersection({dns_ipv4, dns_ipv6}):
+                raise ScriptError(
+                    'Directory Controller and DNS service addresses must be '
+                    'different')
+            try:
+                hostidentity.validate_distinct_service_subnets(
+                    options.ip_addresses, [dns_ipv4, dns_ipv6])
+            except ValueError as e:
+                raise ScriptError(e)
+            options.dns_ip_addresses = [dns_ipv4, dns_ipv6]
+        elif options.dns_hostname or options.dns_ip_addresses:
+            raise ScriptError(
+                '--dns-hostname/--dns-ip-address require --setup-dns')
+    elif options.dns_hostname or options.dns_ip_addresses:
+        raise ScriptError(
+            '--dns-hostname/--dns-ip-address require --ipa-hostname')
+
     installer._system_hostname = None
     if options.ipa_hostname:
         installer._system_hostname = _prepare_split_hostname_replica(
             installer, options, fstore, sstore)
+        if (options.setup_dns and
+                options.dns_hostname in {
+                    installer._system_hostname.lower(),
+                    options.ipa_hostname.lower(),
+                }):
+            raise ScriptError(
+                '--dns-hostname must differ from both --hostname and '
+                '--ipa-hostname in split-hostname mode')
 
     env = Env()
     env._bootstrap(context='installer', confdir=paths.ETC_IPA, log=None)
@@ -1048,6 +1115,14 @@ def promote_check(installer):
     config.dir = installer._top_dir
     config.basedn = api.env.basedn
     config.hidden_replica = options.hidden_replica
+    if installer._system_hostname is not None:
+        config.system_hostname = installer._system_hostname
+        config.ipa_ipv4_address = str(options.ip_addresses[0])
+        config.ipa_ipv6_address = str(options.ip_addresses[1])
+        if options.setup_dns:
+            config.dns_hostname = options.dns_hostname
+            config.dns_ipv4_address = str(options.dns_ip_addresses[0])
+            config.dns_ipv6_address = str(options.dns_ip_addresses[1])
 
     http_pkcs12_file = None
     http_pkcs12_info = None
@@ -1358,7 +1433,12 @@ def promote_check(installer):
             except RuntimeError as e:
                 raise ScriptError(e)
 
-        if options.setup_dns:
+        if installer._system_hostname is not None:
+            config.ips = list(options.ip_addresses)
+            if options.setup_dns:
+                dns.install_check(False, remote_api, True, options,
+                                  config.host_name)
+        elif options.setup_dns:
             dns.install_check(False, remote_api, True, options,
                               config.host_name)
             config.ips = dns.ip_addresses
@@ -1576,6 +1656,9 @@ def install(installer):
     ds.apply_updates()
     service.print_msg("Finalize replication settings")
     ds.finalize_replica_config()
+    if installer._system_hostname is not None:
+        service.print_msg("Restricting Directory Server listeners")
+        ds.configure_split_hostname_listeners()
 
     if kra_enabled:
         # The KRA installer checks for itself the status of setup_kra
@@ -1662,6 +1745,7 @@ def init(installer):
     installer._split_ipa_hostname = None
     installer._split_master_hostname = None
     installer._split_realm = None
+    installer._split_added_hosts_records = []
     installer._update_hosts_file = False
     installer._dirsrv_pkcs12_file = None
     installer._http_pkcs12_file = None

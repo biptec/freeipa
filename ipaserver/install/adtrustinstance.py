@@ -789,6 +789,17 @@ class ADTRUSTInstance(service.Service):
             logger.info("EXTID Service startup entry already exists.")
 
     def __setup_sub_dict(self):
+        directory_ipv4 = getattr(api.env, 'ipa_ipv4_address', None)
+        directory_ipv6 = getattr(api.env, 'ipa_ipv6_address', None)
+        if directory_ipv4 and directory_ipv6:
+            samba_network_bindings = (
+                'bind interfaces only = yes\n'
+                'interfaces = {0} {1}'.format(
+                    directory_ipv4, directory_ipv6)
+            )
+        else:
+            samba_network_bindings = ''
+
         self.sub_dict = dict(
             REALM=self.realm,
             SUFFIX=self.suffix,
@@ -799,6 +810,7 @@ class ADTRUSTInstance(service.Service):
             FQDN=self.fqdn,
             SAMBA_DIR=paths.SAMBA_DIR,
             SERVER_ROLE=self.SERVER_ROLE_NEW,
+            SAMBA_NETWORK_BINDINGS=samba_network_bindings,
         )
 
     def setup(self, fqdn, realm_name, netbios_name,
