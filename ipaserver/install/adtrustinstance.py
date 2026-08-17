@@ -734,12 +734,15 @@ class ADTRUSTInstance(service.Service):
 
     def __validate_server_hostname(self):
         hostname = socket.gethostname()
-        if hostname != self.fqdn:
+        system_hostname = getattr(api.env, 'system_hostname', None)
+        accepted_hostnames = {self.fqdn}
+        if system_hostname:
+            accepted_hostnames.add(system_hostname)
+        if hostname not in accepted_hostnames:
             raise ValueError("Host reports different name than configured: "
                              "'%s' versus '%s'. Samba requires to have "
-                             "the same hostname or Kerberos principal "
-                             "'cifs/%s' will not be found in Samba keytab." %
-                             (hostname, self.fqdn, self.fqdn))
+                             "the same hostname or a configured cifs "
+                             "principal alias." % (hostname, self.fqdn))
 
     def __start(self):
         try:

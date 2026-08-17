@@ -40,7 +40,7 @@ from ipalib.util import no_matching_interface_for_ip_address_warning
 from ipaclient.install.client import configure_krb5_conf, purge_host_keytab
 from ipaserver.install import (
     adtrust, bindinstance, ca, cainstance, dns, dsinstance, httpinstance,
-    installutils, kra, krainstance, krbinstance, otpdinstance,
+    hostidentity, installutils, kra, krainstance, krbinstance, otpdinstance,
     custodiainstance, service,)
 from ipaserver.install import certs
 from ipaserver.install.installutils import (
@@ -400,13 +400,19 @@ def common_cleanup(func):
 
 def preserve_enrollment_state(func):
     """
-    Makes sure the machine is unenrollled if the decorated function
-    failed.
+    Makes sure the machine is unenrolled if the decorated function failed.
+    Split-hostname preparation is rolled back before client unenrollment.
     """
     def decorated(installer):
         try:
             func(installer)
         except BaseException:
+            if installer._split_identity_prepared:
+                try:
+                    _rollback_split_hostname_replica(installer)
+                except Exception:
+                    logger.exception(
+                        "Failed to roll back split-hostname replica identity")
             if installer._enrollment_performed:
                 uninstall_client()
             raise
@@ -827,6 +833,125 @@ def clean_up_hsm_nicknames(api):
         shutil.rmtree(tmpdir)
 
 
+def _prepare_split_hostname_replica(installer, options, fstore, sstore):
+    """Temporarily align an enrolled client with its IPA service hostname."""
+    client_env = Env()
+    client_env._bootstrap(
+        context='installer', confdir=paths.ETC_IPA, log=None)
+    client_env._finalize_core(**dict(constants.DEFAULT_CONFIG))
+
+    system_hostname = client_env.host.lower()
+    ipa_hostname = options.ipa_hostname.lower()
+    if options.host_name is not None:
+        requested_hostname = options.host_name.lower()
+        if requested_hostname != system_hostname:
+            raise ScriptError(
+                '--hostname must match the enrolled client hostname when '
+                '--ipa-hostname is used for replica promotion')
+    if system_hostname == ipa_hostname:
+        return None
+
+    try:
+        installutils.verify_fqdn(
+            ipa_hostname, options.no_host_dns, local_hostname=False)
+    except installutils.BadHostError as e:
+        raise ScriptError(e)
+
+    # The CLI runs replica installation in a private ccache. Preserve that
+    # path for host credentials while obtaining administrative credentials
+    # for the remote LDAP rename and host key generation.
+    host_ccache = os.environ['KRB5CCNAME']
+    if installer._ccache is None:
+        os.environ.pop('KRB5CCNAME', None)
+    else:
+        os.environ['KRB5CCNAME'] = installer._ccache
+    try:
+        installutils.check_creds(options, client_env.realm)
+        installer._ccache = os.environ.get('KRB5CCNAME')
+        admin_ccache = installer._ccache
+    finally:
+        os.environ['KRB5CCNAME'] = host_ccache
+
+    if not admin_ccache:
+        raise ScriptError(
+            'Administrative Kerberos credentials are required for '
+            '--ipa-hostname replica preparation')
+
+    prep_config = ReplicaConfig()
+    prep_config.master_host_name = client_env.server
+    remote_api = remote_connection(prep_config)
+    conn = remote_api.Backend.ldap2
+
+    try:
+        conn.connect(ccache=admin_ccache)
+        os.environ['KRB5CCNAME'] = admin_ccache
+        hostidentity.prepare_replica_identity(
+            system_hostname=system_hostname,
+            ipa_hostname=ipa_hostname,
+            realm=client_env.realm,
+            master_hostname=client_env.server,
+            remote_ldap=conn,
+            remote_api=remote_api,
+            fstore=fstore,
+            sstore=sstore,
+        )
+    finally:
+        if conn.isconnected():
+            conn.disconnect()
+        os.environ['KRB5CCNAME'] = host_ccache
+
+    # Mark preparation complete before acquiring host credentials so even a
+    # kinit failure is rolled back by preserve_enrollment_state().
+    installer._system_hostname = system_hostname
+    installer._split_identity_prepared = True
+    installer._split_admin_ccache = admin_ccache
+    installer._split_ipa_hostname = ipa_hostname
+    installer._split_master_hostname = client_env.server
+    installer._split_realm = client_env.realm
+
+    # From this point the unmodified replica promotion path authenticates as
+    # host/<ipa_hostname>. Populate the private host ccache immediately so
+    # failures after preparation still have deterministic credentials.
+    kinit_keytab(
+        'host/{0}@{1}'.format(ipa_hostname, client_env.realm),
+        paths.KRB5_KEYTAB,
+        host_ccache,
+    )
+    return system_hostname
+
+
+def _rollback_split_hostname_replica(installer):
+    if not installer._split_identity_prepared:
+        return
+
+    host_ccache = os.environ.get('KRB5CCNAME')
+    prep_config = ReplicaConfig()
+    prep_config.master_host_name = installer._split_master_hostname
+    remote_api = remote_connection(prep_config)
+    conn = remote_api.Backend.ldap2
+    try:
+        conn.connect(ccache=installer._split_admin_ccache)
+        os.environ['KRB5CCNAME'] = installer._split_admin_ccache
+        hostidentity.rollback_replica_identity(
+            system_hostname=installer._system_hostname,
+            ipa_hostname=installer._split_ipa_hostname,
+            realm=installer._split_realm,
+            master_hostname=installer._split_master_hostname,
+            remote_ldap=conn,
+            remote_api=remote_api,
+            fstore=sysrestore.FileStore(paths.SYSRESTORE),
+            sstore=sysrestore.StateFile(paths.SYSRESTORE),
+        )
+        installer._split_identity_prepared = False
+    finally:
+        if conn.isconnected():
+            conn.disconnect()
+        if host_ccache is None:
+            os.environ.pop('KRB5CCNAME', None)
+        else:
+            os.environ['KRB5CCNAME'] = host_ccache
+
+
 def remote_connection(config):
     logger.debug("Creating LDAP connection to %s", config.master_host_name)
     ldapuri = 'ldaps://%s' % ipautil.format_netloc(config.master_host_name)
@@ -883,6 +1008,11 @@ def promote_check(installer):
 
     fstore = sysrestore.FileStore(paths.SYSRESTORE)
 
+    installer._system_hostname = None
+    if options.ipa_hostname:
+        installer._system_hostname = _prepare_split_hostname_replica(
+            installer, options, fstore, sstore)
+
     env = Env()
     env._bootstrap(context='installer', confdir=paths.ETC_IPA, log=None)
     env._finalize_core(**dict(constants.DEFAULT_CONFIG))
@@ -898,6 +1028,11 @@ def promote_check(installer):
     config = ReplicaConfig()
     config.realm_name = api.env.realm
     config.host_name = api.env.host
+    if installer._system_hostname is not None:
+        # From this point every stock installer consumer must see only the
+        # canonical IPA service identity. The machine identity is retained in
+        # installer._system_hostname for finalization.
+        options.host_name = config.host_name
     config.domain_name = api.env.domain
     config.master_host_name = api.env.server
     if not api.env.ca_host or api.env.ca_host == api.env.host:
@@ -1477,6 +1612,17 @@ def install(installer):
                 service.print_msg(line, sys.stdout)
 
     ca_servers = find_providing_servers('CA', api.Backend.ldap2, api=api)
+
+    if installer._system_hostname is not None:
+        service.print_msg("Finalizing machine host identity")
+        hostidentity.finalize_machine_identity(
+            ipa_hostname=config.host_name,
+            system_hostname=installer._system_hostname,
+            realm=config.realm_name,
+            fstore=fstore,
+        )
+        installer._split_identity_prepared = False
+
     api.Backend.ldap2.disconnect()
 
     # Everything installed properly, activate ipa service.
@@ -1510,6 +1656,12 @@ def init(installer):
 
     installer._top_dir = None
     installer._config = None
+    installer._system_hostname = None
+    installer._split_identity_prepared = False
+    installer._split_admin_ccache = None
+    installer._split_ipa_hostname = None
+    installer._split_master_hostname = None
+    installer._split_realm = None
     installer._update_hosts_file = False
     installer._dirsrv_pkcs12_file = None
     installer._http_pkcs12_file = None

@@ -36,7 +36,10 @@ The password for the IPA admin user.
 Create home directories for users on their first login.
 .TP
 \fB\-\-hostname\fR=\fIHOST_NAME\fR
-The fully\-qualified DNS name of this server.
+The fully\-qualified DNS name of this machine. Normally it is also the canonical IPA server name. When \fB\-\-ipa-hostname\fR is used, this name remains the machine identity after installation.
+.TP
+\fB\-\-ipa\-hostname\fR=\fIIPA_HOST_NAME\fR
+Use a distinct canonical FQDN for IPA server services while preserving \fB\-\-hostname\fR as the machine identity. IPA server discovery, service principals, certificates, DNS server records and topology remain anchored on IPA_HOST_NAME. This option is intended for deployments that deliberately separate machine and service identities.
 .TP
 \fB\-\-ip\-address\fR=\fIIP_ADDRESS\fR
 The IP address of this server. If this address does not match the address the host resolves to and \-\-setup\-dns is not selected, the installation will fail. If the server hostname is not resolvable, a record for the hostname and IP_ADDRESS is added to /etc/hosts.

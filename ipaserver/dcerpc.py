@@ -31,7 +31,6 @@ import time
 
 from ipalib import api, _
 from ipalib import errors
-from ipalib.constants import FQDN
 from ipapython import ipautil
 from ipapython.dn import DN
 from ipapython.dnsutil import query_srv
@@ -1762,7 +1761,7 @@ class TrustDomainJoins:
         enforce_smb_encryption(ld.creds)
         ld.creds.guess(ld.parm)
         ld.creds.set_workstation(ld.hostname)
-        ld.retrieve(FQDN)
+        ld.retrieve(api.env.host)
         self.local_domain = ld
 
     def populate_remote_domain(self, realm, realm_server=None,

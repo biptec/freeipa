@@ -710,6 +710,10 @@ class Backup(admintool.AdminTool):
             'ipa', 'time', time.strftime(ISO8601_DATETIME_FMT, time.gmtime())
         )
         config.set('ipa', 'host', api.env.host)
+        config.set(
+            'ipa', 'system_hostname',
+            getattr(api.env, 'system_hostname', api.env.host)
+        )
         config.set('ipa', 'ipa_version', str(version.VERSION))
         config.set('ipa', 'version', '1')
 
