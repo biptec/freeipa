@@ -243,11 +243,11 @@ class DsInstance(service.Service):
         except errors.EmptyModlist:
             return
 
-        # The active LDAPI connection is invalidated by the restart. Reconnect
-        # immediately because later installer steps continue to use ldap2.
-        api.Backend.ldap2.disconnect()
-        self.restart()
-        api.Backend.ldap2.connect()
+        # Generic systemd service waits probe LDAP on localhost. Split-mode
+        # intentionally removes loopback TCP listeners, so skip that probe.
+        # DsInstance.restart() still verifies the systemd unit and reconnects
+        # the IPA backend over its configured LDAPI socket.
+        self.restart(wait=False)
 
     def __common_setup(self):
 

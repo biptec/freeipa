@@ -3,7 +3,9 @@
 #
 from unittest.mock import patch
 
-from ipaserver.install import bindinstance, hostidentity, httpinstance
+from ipaserver.install import (
+    bindinstance, dsinstance, hostidentity, httpinstance,
+)
 
 
 class FakeAddress:
@@ -83,3 +85,25 @@ def test_temporary_hosts_records_are_removed_exactly(tmp_path):
         '127.0.0.1 localhost\n'
         '10.0.0.20 other.example.test other\n'
     )
+
+
+def test_ds_split_listener_restart_skips_localhost_port_probe():
+    ds = object.__new__(dsinstance.DsInstance)
+    ds.fqdn = 'ipa.example.test'
+
+    with patch.object(dsinstance, 'api') as api_mock, \
+            patch.object(dsinstance.DsInstance, 'restart') as restart:
+        api_mock.env.ipa_ipv4_address = '10.0.0.10'
+        api_mock.env.ipa_ipv6_address = '2001:db8:1::10'
+        ldap = api_mock.Backend.ldap2
+        ldap.isconnected.return_value = True
+        entry = {}
+        ldap.get_entry.return_value = entry
+
+        ds.configure_split_hostname_listeners()
+
+    assert entry['nsslapd-listenhost'] == ['ipa.example.test']
+    assert entry['nsslapd-securelistenhost'] == ['ipa.example.test']
+    restart.assert_called_once_with(wait=False)
+    ldap.disconnect.assert_not_called()
+    ldap.connect.assert_not_called()
