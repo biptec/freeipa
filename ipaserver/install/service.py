@@ -416,6 +416,30 @@ class Service:
             if pw_name:
                 os.remove(pw_name)
 
+    def _managed_host_dn(self):
+        """Return the host object that owns newly created services.
+
+        During initial split-hostname installation only the temporary IPA
+        host object exists.  After finalization the machine host object exists
+        instead.  Select by LDAP state rather than merely by configuration so
+        both phases remain valid.
+        """
+        default_dn = DN(
+            ('fqdn', self.fqdn), ('cn', 'computers'), ('cn', 'accounts'),
+            self.suffix)
+        system_hostname = getattr(self.api.env, 'system_hostname', None)
+        if not system_hostname or system_hostname == self.fqdn:
+            return default_dn
+
+        system_dn = DN(
+            ('fqdn', system_hostname), ('cn', 'computers'), ('cn', 'accounts'),
+            self.suffix)
+        try:
+            self.api.Backend.ldap2.get_entry(system_dn, ['fqdn'])
+        except errors.NotFound:
+            return default_dn
+        return system_dn
+
     def move_service(self, principal):
         """
         Used to move a principal entry created by kadmin.local from
@@ -431,7 +455,7 @@ class Service:
             return None
         entry.pop('krbpwdpolicyreference', None)  # don't copy virtual attr
         newdn = self.get_principal_dn(principal)
-        hostdn = DN(('fqdn', self.fqdn), ('cn', 'computers'), ('cn', 'accounts'), self.suffix)
+        hostdn = self._managed_host_dn()
         api.Backend.ldap2.delete_entry(entry)
         entry.dn = newdn
         classes = entry.get("objectclass")
@@ -449,7 +473,7 @@ class Service:
         The principal needs to be fully-formed: service/host@REALM
         """
         dn = self.get_principal_dn(principal)
-        hostdn = DN(('fqdn', self.fqdn), ('cn', 'computers'), ('cn', 'accounts'), self.suffix)
+        hostdn = self._managed_host_dn()
         entry = api.Backend.ldap2.make_entry(
             dn,
             objectclass=[

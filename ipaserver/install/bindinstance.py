@@ -89,6 +89,40 @@ named_conf_include_template = "include \"%(path)s\";\n"
 NAMED_SECTION_OPTIONS = "options"
 NAMED_SECTION_IPA = "ipa"
 
+# The DNS runtime identity is deliberately independent from the IPA master
+# hostname in split service-network mode.  Store the owning IPA master on the
+# DNS server configuration object as an LDAP attribute option so server-level
+# operations can map an IPA topology node back to its DNS endpoint.
+DNS_IPA_SERVER_ATTR = 'idnsSubstitutionVariable;ipaserver'
+
+
+def dns_server_id_for_ipa_server(api_instance, ipa_hostname):
+    """Return the DNS server identity owned by an IPA topology server."""
+    if ipa_hostname == getattr(api_instance.env, 'host', None):
+        configured = getattr(api_instance.env, 'dns_hostname', None)
+        if configured:
+            return configured
+
+    conn = api_instance.Backend.ldap2
+    base_dn = DN(
+        api_instance.env.container_dnsservers,
+        api_instance.env.basedn,
+    )
+    search_filter = conn.make_filter_from_attr(
+        DNS_IPA_SERVER_ATTR, ipa_hostname)
+    try:
+        entries = conn.get_entries(
+            base_dn, ldap.SCOPE_ONELEVEL, filter=search_filter,
+            attrs_list=['idnsserverid'])
+    except errors.NotFound:
+        return ipa_hostname
+
+    if len(entries) != 1:
+        raise RuntimeError(
+            'Expected exactly one DNS server identity for IPA server {0}'
+            .format(ipa_hostname))
+    return str(entries[0].single_value['idnsserverid'])
+
 
 def create_reverse():
     return ipautil.user_input(
@@ -669,6 +703,16 @@ class BindInstance(service.Service):
 
     suffix = ipautil.dn_attribute_property('_suffix')
 
+    @property
+    def principal(self):
+        """Kerberos identity of named, independent from IPA master FQDN."""
+        hostname = self.dns_hostname or self.fqdn
+        if any(value is None for value in (
+                self.realm, hostname, self.service_prefix)):
+            return None
+        return '{0}/{1}@{2}'.format(
+            self.service_prefix, hostname, self.realm)
+
     def setup(self, fqdn, ip_addresses, realm_name, domain_name, forwarders,
               forward_policy, reverse_zones, zonemgr=None,
               no_dnssec_validation=False, dns_over_tls=False,
@@ -977,6 +1021,7 @@ class BindInstance(service.Service):
 
         self.sub_dict = dict(
             FQDN=self.fqdn,
+            DNS_SERVER_ID=self.dns_hostname,
             SERVER_ID=ipaldap.realm_to_serverid(self.realm),
             SUFFIX=self.suffix,
             MANAGED_KEYS_DIR=paths.NAMED_MANAGED_KEYS_DIR,
@@ -1223,10 +1268,14 @@ class BindInstance(service.Service):
 
     def __setup_server_configuration(self):
         ensure_dnsserver_container_exists(api.Backend.ldap2, self.api)
+        dns_server_id = self.dns_hostname or self.fqdn
+        owner_mapping = '{0}={1}'.format(
+            DNS_IPA_SERVER_ATTR, self.fqdn)
         try:
             self.api.Command.dnsserver_add(
-                self.fqdn,
-                idnssoamname=DNSName(self.dns_hostname).make_absolute(),
+                dns_server_id,
+                idnssoamname=DNSName(dns_server_id).make_absolute(),
+                setattr=[owner_mapping],
             )
         except errors.DuplicateEntry:
             # probably reinstallation of DNS
@@ -1234,9 +1283,11 @@ class BindInstance(service.Service):
 
         try:
             self.api.Command.dnsserver_mod(
-                self.fqdn,
+                dns_server_id,
+                idnssoamname=DNSName(dns_server_id).make_absolute(),
                 idnsforwarders=[unicode(f) for f in self.forwarders],
-                idnsforwardpolicy=unicode(self.forward_policy)
+                idnsforwardpolicy=unicode(self.forward_policy),
+                setattr=[owner_mapping],
             )
         except errors.EmptyModlist:
             pass

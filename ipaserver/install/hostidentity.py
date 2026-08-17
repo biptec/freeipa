@@ -30,7 +30,6 @@ logger = logging.getLogger(__name__)
 # Service principals created by the server installer whose keys are tied to
 # the server host object in the legacy split-hostname deployment model.
 SERVICE_PRINCIPAL_PREFIXES = (
-    'DNS',
     'HTTP',
     'cifs',
     'dogtag',
@@ -371,6 +370,7 @@ def finalize_machine_identity(
     sssd_changed = False
     config_changed = False
     hostname_changed = False
+    added_hosts_records = []
 
     try:
         transition_host_entry(
@@ -386,6 +386,27 @@ def finalize_machine_identity(
             system_hostname, realm, api_instance.env.domain)
         _persist_hostnames(ipa_hostname, system_hostname, fstore=fstore)
         config_changed = True
+
+        directory_addresses = [
+            value for value in (
+                getattr(api_instance.env, 'ipa_ipv4_address', None),
+                getattr(api_instance.env, 'ipa_ipv6_address', None),
+            ) if value
+        ]
+        added_hosts_records.extend(_ensure_local_hosts_records(
+            ipa_hostname, directory_addresses))
+
+        dns_hostname = getattr(api_instance.env, 'dns_hostname', None)
+        if dns_hostname:
+            dns_addresses = [
+                value for value in (
+                    getattr(api_instance.env, 'dns_ipv4_address', None),
+                    getattr(api_instance.env, 'dns_ipv6_address', None),
+                ) if value
+            ]
+            added_hosts_records.extend(_ensure_local_hosts_records(
+                dns_hostname, dns_addresses))
+
         tasks.set_hostname(system_hostname)
         hostname_changed = True
         verify_machine_identity(
@@ -419,6 +440,10 @@ def finalize_machine_identity(
                 tasks.set_hostname(ipa_hostname)
             except Exception:
                 logger.exception('Failed to restore operating-system hostname')
+        try:
+            _remove_local_hosts_records(added_hosts_records)
+        except Exception:
+            logger.exception('Failed to roll back /etc/hosts service records')
         raise
 
 
