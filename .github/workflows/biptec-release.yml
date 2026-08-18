@@ -72,5 +72,5 @@ jobs:
             dist/biptec-release/BUILD-METADATA.txt \
             dist/biptec-release/RPM-MANIFEST.txt \
             dist/biptec-release/README-INSTALL.txt \
-            --title "BIPTEC FreeIPA $GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
             --generate-notes
