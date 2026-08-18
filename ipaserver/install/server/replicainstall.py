@@ -10,6 +10,7 @@ import logging
 import dns.exception as dnsexception
 import dns.name as dnsname
 import itertools
+import ipaddress
 import os
 import shutil
 import socket
@@ -17,6 +18,7 @@ import sys
 import tempfile
 import textwrap
 import traceback
+from types import SimpleNamespace
 
 from packaging.version import parse as parse_version
 import six
@@ -845,6 +847,64 @@ def clean_up_hsm_nicknames(api):
         shutil.rmtree(tmpdir)
 
 
+def _split_dns_name(hostname, domain):
+    hostname = hostname.rstrip('.').lower()
+    domain = domain.rstrip('.').lower()
+    suffix = '.' + domain
+    if not hostname.endswith(suffix):
+        raise ScriptError(
+            '--ipa-hostname must be inside the IPA DNS domain for replica '
+            'promotion')
+    name = hostname[:-len(suffix)]
+    if not name:
+        raise ScriptError('--ipa-hostname cannot equal the IPA DNS domain')
+    return domain, name
+
+
+def _ensure_split_dns_records(remote_api, domain, hostname, addresses):
+    """Publish missing Directory A/AAAA records before replica conncheck."""
+    zone, name = _split_dns_name(hostname, domain)
+    try:
+        entry = remote_api.Command.dnsrecord_show(
+            unicode(zone), unicode(name), all=True)['result']
+    except errors.NotFound:
+        entry = {}
+
+    existing = {}
+    for attr in ('arecord', 'aaaarecord'):
+        existing[attr] = {
+            str(ipaddress.ip_address(str(value)))
+            for value in entry.get(attr, ())
+        }
+
+    added = []
+    try:
+        for address in addresses:
+            value = str(ipaddress.ip_address(str(address)))
+            attr = 'arecord' if address.version == 4 else 'aaaarecord'
+            if value in existing[attr]:
+                continue
+            try:
+                remote_api.Command.dnsrecord_add(
+                    unicode(zone), unicode(name), **{attr: unicode(value)})
+            except (errors.DuplicateEntry, errors.EmptyModlist):
+                continue
+            added.append((zone, name, attr, value))
+            existing[attr].add(value)
+    except BaseException:
+        _remove_split_dns_records(remote_api, added)
+        raise
+    return added
+
+
+def _remove_split_dns_records(remote_api, records):
+    for zone, name, attr, value in reversed(records or ()):
+        try:
+            remote_api.Command.dnsrecord_del(
+                unicode(zone), unicode(name), **{attr: unicode(value)})
+        except (errors.NotFound, errors.AttrValueNotFound, errors.EmptyModlist):
+            pass
+
 def _prepare_split_hostname_replica(installer, options, fstore, sstore):
     """Temporarily align an enrolled client with its IPA service hostname."""
     client_env = Env()
@@ -889,14 +949,13 @@ def _prepare_split_hostname_replica(installer, options, fstore, sstore):
             'Administrative Kerberos credentials are required for '
             '--ipa-hostname replica preparation')
 
-    prep_config = ReplicaConfig()
-    prep_config.master_host_name = client_env.server
-    remote_api = remote_connection(prep_config)
-    conn = remote_api.Backend.ldap2
+    remote_api = SimpleNamespace(env=client_env)
+    conn = ipaldap.LDAPClient.from_hostname_secure(
+        client_env.server, cacert=paths.IPA_CA_CRT)
 
     try:
-        conn.connect(ccache=admin_ccache)
         os.environ['KRB5CCNAME'] = admin_ccache
+        conn.gssapi_bind()
         added_hosts_records = hostidentity.prepare_replica_identity(
             system_hostname=system_hostname,
             ipa_hostname=ipa_hostname,
@@ -909,8 +968,7 @@ def _prepare_split_hostname_replica(installer, options, fstore, sstore):
             service_ip_addresses=options.ip_addresses,
         )
     finally:
-        if conn.isconnected():
-            conn.disconnect()
+        conn.unbind()
         os.environ['KRB5CCNAME'] = host_ccache
 
     # Mark preparation complete before acquiring host credentials so even a
@@ -939,28 +997,46 @@ def _rollback_split_hostname_replica(installer):
         return
 
     host_ccache = os.environ.get('KRB5CCNAME')
-    prep_config = ReplicaConfig()
-    prep_config.master_host_name = installer._split_master_hostname
-    remote_api = remote_connection(prep_config)
-    conn = remote_api.Backend.ldap2
     try:
-        conn.connect(ccache=installer._split_admin_ccache)
-        os.environ['KRB5CCNAME'] = installer._split_admin_ccache
-        hostidentity.rollback_replica_identity(
-            system_hostname=installer._system_hostname,
-            ipa_hostname=installer._split_ipa_hostname,
-            realm=installer._split_realm,
-            master_hostname=installer._split_master_hostname,
-            remote_ldap=conn,
-            remote_api=remote_api,
-            fstore=sysrestore.FileStore(paths.SYSRESTORE),
-            sstore=sysrestore.StateFile(paths.SYSRESTORE),
-            added_hosts_records=installer._split_added_hosts_records,
-        )
-        installer._split_identity_prepared = False
+        client_env = Env()
+        client_env._bootstrap(
+            context='installer', confdir=paths.ETC_IPA, log=None)
+        client_env._finalize_core(**dict(constants.DEFAULT_CONFIG))
+        remote_api = SimpleNamespace(env=client_env)
+        conn = ipaldap.LDAPClient.from_hostname_secure(
+            installer._split_master_hostname, cacert=paths.IPA_CA_CRT)
+        try:
+            os.environ['KRB5CCNAME'] = installer._split_admin_ccache
+            conn.gssapi_bind()
+            hostidentity.rollback_replica_identity(
+                system_hostname=installer._system_hostname,
+                ipa_hostname=installer._split_ipa_hostname,
+                realm=installer._split_realm,
+                master_hostname=installer._split_master_hostname,
+                remote_ldap=conn,
+                remote_api=remote_api,
+                fstore=sysrestore.FileStore(paths.SYSRESTORE),
+                sstore=sysrestore.StateFile(paths.SYSRESTORE),
+                added_hosts_records=installer._split_added_hosts_records,
+            )
+            installer._split_identity_prepared = False
+        finally:
+            conn.unbind()
+
+        if installer._split_added_dns_records:
+            prep_config = ReplicaConfig()
+            prep_config.master_host_name = installer._split_master_hostname
+            dns_api = remote_connection(prep_config)
+            dns_conn = dns_api.Backend.ldap2
+            try:
+                dns_conn.connect(ccache=installer._split_admin_ccache)
+                _remove_split_dns_records(
+                    dns_api, installer._split_added_dns_records)
+                installer._split_added_dns_records = []
+            finally:
+                if dns_conn.isconnected():
+                    dns_conn.disconnect()
     finally:
-        if conn.isconnected():
-            conn.disconnect()
         if host_ccache is None:
             os.environ.pop('KRB5CCNAME', None)
         else:
@@ -1069,6 +1145,15 @@ def promote_check(installer):
 
     installer._system_hostname = None
     if options.ipa_hostname:
+        if ipa_client_installed:
+            # Split preparation backs up default.conf in the server FileStore,
+            # which makes ipa-certupdate consider the host server-configured.
+            # Refresh client trust first, while this is still a plain client.
+            try:
+                ipautil.run([paths.IPA_CERTUPDATE])
+            except ipautil.CalledProcessError:
+                raise RuntimeError(
+                    "ipa-certupdate failed to refresh certs.")
         installer._system_hostname = _prepare_split_hostname_replica(
             installer, options, fstore, sstore)
         if (options.setup_dns and
@@ -1085,11 +1170,26 @@ def promote_check(installer):
     env._finalize_core(**dict(constants.DEFAULT_CONFIG))
 
     xmlrpc_uri = 'https://{}/ipa/xml'.format(ipautil.format_netloc(env.host))
-    api.bootstrap(in_server=True,
-                  context='installer',
-                  confdir=paths.ETC_IPA,
-                  ldap_uri=ipaldap.realm_to_ldapi_uri(env.realm),
-                  xmlrpc_uri=xmlrpc_uri)
+    bootstrap_config = dict(
+        in_server=True,
+        context='installer',
+        confdir=paths.ETC_IPA,
+        ldap_uri=ipaldap.realm_to_ldapi_uri(env.realm),
+        xmlrpc_uri=xmlrpc_uri,
+    )
+    if installer._system_hostname is not None:
+        bootstrap_config.update(
+            system_hostname=installer._system_hostname,
+            ipa_ipv4_address=str(options.ip_addresses[0]),
+            ipa_ipv6_address=str(options.ip_addresses[1]),
+        )
+        if options.setup_dns:
+            bootstrap_config.update(
+                dns_hostname=options.dns_hostname,
+                dns_ipv4_address=str(options.dns_ip_addresses[0]),
+                dns_ipv6_address=str(options.dns_ip_addresses[1]),
+            )
+    api.bootstrap(**bootstrap_config)
     api.finalize()
 
     config = ReplicaConfig()
@@ -1210,9 +1310,10 @@ def promote_check(installer):
                  paths.KRB5_KEYTAB,
                  ccache)
 
-    if ipa_client_installed:
+    if ipa_client_installed and not options.ipa_hostname:
         # host was already an IPA client, refresh client cert stores to
-        # ensure we have up to date CA certs.
+        # ensure we have up to date CA certs. Split-hostname promotion does
+        # this before temporary server identity preparation above.
         try:
             ipautil.run([paths.IPA_CERTUPDATE])
         except ipautil.CalledProcessError:
@@ -1289,6 +1390,18 @@ def promote_check(installer):
                 conn.disconnect()
                 conn.connect(ccache=ccache)
 
+
+        if installer._system_hostname is not None:
+            conn.disconnect()
+            conn.connect(ccache=installer._split_admin_ccache)
+            try:
+                installer._split_added_dns_records = (
+                    _ensure_split_dns_records(
+                        remote_api, config.domain_name, config.host_name,
+                        options.ip_addresses))
+            finally:
+                conn.disconnect()
+                conn.connect(ccache=ccache)
 
         # Check that we don't already have a replication agreement
         if replman.get_replication_agreement(config.host_name):
@@ -1746,6 +1859,7 @@ def init(installer):
     installer._split_master_hostname = None
     installer._split_realm = None
     installer._split_added_hosts_records = []
+    installer._split_added_dns_records = []
     installer._update_hosts_file = False
     installer._dirsrv_pkcs12_file = None
     installer._http_pkcs12_file = None

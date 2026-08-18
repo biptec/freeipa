@@ -10,6 +10,7 @@ from ipaserver.install import (
     adtrustinstance, bindinstance, dsinstance, hostidentity, httpinstance,
     service,
 )
+from ipaserver.install.server import replicainstall
 
 
 class FakeAddress:
@@ -330,3 +331,39 @@ def test_adtrust_normal_cldap_keeps_upstream_listener():
         adtrust.configure_cldap_listener()
 
     api_mock.Backend.ldap2.get_entry.assert_not_called()
+
+
+def test_split_service_alias_is_deferred_during_replica_promotion():
+    svc = object.__new__(service.Service)
+    svc.promote = True
+    svc.fqdn = 'ipa.example.test'
+    svc.principal = 'ldap/ipa.example.test@EXAMPLE.TEST'
+    svc.api = MagicMock()
+    svc.api.env.system_hostname = 'node.example.test'
+
+    assert svc._split_service_principal_alias() is None
+
+
+def test_split_dns_name_requires_ipa_domain():
+    zone, name = replicainstall._split_dns_name(
+        'dc2.example.test', 'example.test')
+    assert zone == 'example.test'
+    assert name == 'dc2'
+
+
+def test_split_dns_records_add_only_missing_addresses():
+    remote_api = MagicMock()
+    remote_api.Command.dnsrecord_show.return_value = {
+        'result': {'arecord': ['10.0.0.11']}}
+    addresses = [
+        FakeAddress('10.0.0.11', 4),
+        FakeAddress('2001:db8::11', 6),
+    ]
+
+    added = replicainstall._ensure_split_dns_records(
+        remote_api, 'example.test', 'dc2.example.test', addresses)
+
+    remote_api.Command.dnsrecord_add.assert_called_once_with(
+        'example.test', 'dc2', aaaarecord='2001:db8::11')
+    assert added == [
+        ('example.test', 'dc2', 'aaaarecord', '2001:db8::11')]

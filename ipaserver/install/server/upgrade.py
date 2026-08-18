@@ -1672,6 +1672,7 @@ def upgrade_configuration():
             sstore.backup_state('installation', 'complete', False)
 
     fqdn = api.env.host
+    split_directory = bool(getattr(api.env, 'ipa_ipv4_address', None))
 
     # Ok, we are an IPA server, do the additional tests
     ds = dsinstance.DsInstance(realm_name=api.env.realm)
@@ -1679,7 +1680,7 @@ def upgrade_configuration():
     # Split Directory Service must be able to start before integrated DNS or
     # any external resolver is available.  Recreate its pre-start bootstrap
     # helper on upgrades before attempting to start DS.
-    if getattr(api.env, 'ipa_ipv4_address', None):
+    if split_directory:
         ds.configure_split_network_bootstrap()
 
     # start DS, CA will not start without running DS, and cause error
@@ -1720,7 +1721,7 @@ def upgrade_configuration():
             httpinstance.HTTPInstance._split_httpd_server_name_directive(fqdn)),
     )
 
-    if getattr(api.env, 'ipa_ipv4_address', None):
+    if split_directory:
         main_httpd_conf = os.path.join(
             paths.ETC_HTTPD_DIR, 'conf', 'httpd.conf')
         if os.path.isfile(main_httpd_conf):
@@ -1762,9 +1763,10 @@ def upgrade_configuration():
 
         ds_dirname = dsinstance.config_dirname(ds.serverid)
 
-        upgrade_file(sub_dict, paths.HTTPD_IPA_CONF,
-                     os.path.join(paths.USR_SHARE_IPA_DIR,
-                                  "ipa.conf.template"))
+        upgrade_file(
+            sub_dict, paths.HTTPD_IPA_CONF,
+            os.path.join(paths.USR_SHARE_IPA_DIR, "ipa.conf.template"),
+            force=split_directory)
         upgrade_file(sub_dict, paths.HTTPD_IPA_REWRITE_CONF,
                      os.path.join(paths.USR_SHARE_IPA_DIR,
                                   "ipa-rewrite.conf.template"))
@@ -1877,6 +1879,8 @@ def upgrade_configuration():
     ds.fqdn = fqdn
     ds.realm = api.env.realm
     ds.suffix = ipautil.realm_to_suffix(api.env.realm)
+    if split_directory:
+        ds.configure_split_hostname_listeners()
 
     if any([
         ds_enable_sidgen_extdom_plugins(ds),
@@ -2003,6 +2007,10 @@ def upgrade_configuration():
                         CACERT_PEM=paths.CACERT_PEM,
                         KDC_CA_BUNDLE_PEM=paths.KDC_CA_BUNDLE_PEM,
                         CA_BUNDLE_PEM=paths.CA_BUNDLE_PEM)
+    if split_directory:
+        krb.configure_split_hostname_listeners()
+        krb.restart()
+        krbinstance.KpasswdInstance().restart()
     krb.add_anonymous_principal()
     setup_spake(krb)
     setup_pkinit(krb)
