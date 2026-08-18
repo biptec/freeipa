@@ -21,6 +21,7 @@ options {
 
 	managed-keys-directory "$MANAGED_KEYS_DIR";
 
+	$NAMED_SERVICE_LISTEN_OPTIONS
 	$NAMED_DNS_OVER_TLS_OPTIONS_CONF
 
 	/* user customizations of options */

@@ -21,6 +21,7 @@ from ipalib.install.service import (enroll_only,
 from ipapython.install import typing
 from ipapython.install.core import group, knob, extend_knob
 from ipapython.install.common import step
+from ipapython.ipautil import CheckedIPAddress
 from ipaplatform import services
 
 from ipaserver.install.installutils import validate_key_type_size
@@ -270,9 +271,38 @@ class ServerInstallInterface(ServerCertificateInstallInterface,
 
     ip_addresses = extend_knob(
         client.ClientInstallInterface.ip_addresses,
-        description="Server IP Address. This option can be used multiple "
-                    "times",
+        description=("IPA/Directory Controller IP address. This option can "
+                     "be used multiple times"),
+        cli_names=['--ip-address', '--directory-ip-address'],
     )
+
+    dns_hostname = knob(
+        str, None,
+        description=("network-facing FQDN of the integrated DNS service; "
+                     "the DNS Kerberos/backend identity remains the IPA "
+                     "server hostname"),
+        cli_names='--dns-hostname',
+        cli_metavar='FQDN',
+    )
+    dns_hostname = enroll_only(dns_hostname)
+
+    dns_ip_addresses = knob(
+        typing.List[CheckedIPAddress], None,
+        description=("integrated DNS service IP address. In split-hostname "
+                     "mode specify exactly one IPv4 and one IPv6 address"),
+        cli_names='--dns-ip-address',
+        cli_metavar='IP_ADDRESS',
+    )
+    dns_ip_addresses = enroll_only(dns_ip_addresses)
+
+    @dns_ip_addresses.validator
+    def dns_ip_addresses(self, values):
+        for value in values:
+            try:
+                CheckedIPAddress(value)
+            except Exception as e:
+                raise ValueError(
+                    "invalid DNS IP address {0}: {1}".format(value, e))
 
     principal = client.ClientInstallInterface.principal
     principal = extend_knob(

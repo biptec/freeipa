@@ -110,6 +110,9 @@ class HTTPInstance(service.Service):
             IPA_CCACHES=paths.IPA_CCACHES,
             WSGI_PREFIX_DIR=paths.WSGI_PREFIX_DIR,
             WSGI_PROCESSES=constants.WSGI_PROCESSES,
+            HTTPD_LISTEN_DIRECTIVES=self._split_httpd_listen_directives(),
+            HTTPD_SERVER_NAME_DIRECTIVE=(
+                self._split_httpd_server_name_directive(fqdn)),
         )
         self.ca_file = ca_file
         if ca_is_configured is not None:
@@ -119,6 +122,9 @@ class HTTPInstance(service.Service):
 
         self.step("stopping httpd", self.__stop)
         self.step("backing up ssl.conf", self.backup_ssl_conf)
+        if getattr(api.env, 'ipa_ipv4_address', None):
+            self.step("restricting httpd listeners",
+                      self.configure_split_hostname_listeners)
         self.step("configuring mod_ssl certificate paths",
                   self.configure_mod_ssl_certs)
         self.step("setting mod_ssl protocol list",
@@ -148,6 +154,38 @@ class HTTPInstance(service.Service):
         self.step("enabling oddjobd", self.enable_and_start_oddjobd)
 
         self.start_creation()
+
+    @staticmethod
+    def _split_httpd_server_name_directive(fqdn=None):
+        if not getattr(api.env, 'system_hostname', None):
+            return ''
+        return 'ServerName {0}'.format(fqdn or api.env.host)
+
+    @staticmethod
+    def _split_httpd_listen_directives():
+        ipv4 = getattr(api.env, 'ipa_ipv4_address', None)
+        ipv6 = getattr(api.env, 'ipa_ipv6_address', None)
+        if not (ipv4 and ipv6):
+            return ''
+        return '\n'.join((
+            'Listen {0}:80'.format(ipv4),
+            'Listen [{0}]:80'.format(ipv6),
+            'Listen {0}:443 https'.format(ipv4),
+            'Listen [{0}]:443 https'.format(ipv6),
+        ))
+
+    def configure_split_hostname_listeners(self):
+        """Remove distro wildcard listeners; ipa.conf owns explicit ones."""
+        main_conf = os.path.join(paths.ETC_HTTPD_DIR, 'conf', 'httpd.conf')
+        if not os.path.isfile(main_conf):
+            raise RuntimeError(
+                'Split-hostname HTTP binding requires {}'.format(main_conf))
+
+        self.fstore.backup_file(main_conf)
+        directivesetter.set_directive(
+            main_conf, 'Listen', None, quotes=False)
+        directivesetter.set_directive(
+            paths.HTTPD_SSL_SITE_CONF, 'Listen', None, quotes=False)
 
     def __stop(self):
         self.backup_state("running", self.is_running())

@@ -4,6 +4,9 @@
 # This file may be overwritten on upgrades.
 #
 
+$HTTPD_LISTEN_DIRECTIVES
+$HTTPD_SERVER_NAME_DIRECTIVE
+
 # Load lookup_identity module in case it has not been loaded yet
 # The module is used to search users according the certificate.
 <IfModule !lookup_identity_module>

@@ -1472,6 +1472,32 @@ def upgrade_bind(fstore):
     """Update BIND named DNS server instance
     """
     bind = bindinstance.BindInstance(fstore, api=api)
+    stored_directory_addresses = [
+        getattr(api.env, 'ipa_ipv4_address', None),
+        getattr(api.env, 'ipa_ipv6_address', None),
+    ]
+    if all(stored_directory_addresses):
+        bind.ip_addresses = tuple(
+            ipautil.CheckedIPAddress(address)
+            for address in stored_directory_addresses
+        )
+    else:
+        bind.ip_addresses = tuple(
+            installutils.resolve_ip_addresses_nss(api.env.host))
+
+    stored_dns_addresses = [
+        getattr(api.env, 'dns_ipv4_address', None),
+        getattr(api.env, 'dns_ipv6_address', None),
+    ]
+    bind.dns_hostname = getattr(api.env, 'dns_hostname', None) or api.env.host
+    if all(stored_dns_addresses):
+        bind.dns_ip_addresses = tuple(
+            ipautil.CheckedIPAddress(address)
+            for address in stored_dns_addresses
+        )
+    else:
+        bind.dns_ip_addresses = bind.ip_addresses
+
     bind.setup_templating(
         fqdn=api.env.host,
         realm_name=api.env.realm,
@@ -1495,10 +1521,6 @@ def upgrade_bind(fstore):
     # resolve1's stub resolver config file.
     has_resolved_ipa_conf = os.path.isfile(paths.SYSTEMD_RESOLVED_IPA_CONF)
     if not has_resolved_ipa_conf and detect_resolve1_resolv_conf():
-        ip_addresses = installutils.resolve_ip_addresses_nss(
-            api.env.host
-        )
-        bind.ip_addresses = ip_addresses
         bind.setup_resolv_conf()
         logger.info("Updated systemd-resolved configuration")
 
@@ -1683,7 +1705,21 @@ def upgrade_configuration():
         IPA_CUSTODIA_SOCKET=paths.IPA_CUSTODIA_SOCKET,
         KDCPROXY_CONFIG=paths.KDCPROXY_CONFIG,
         DOMAIN=api.env.domain,
+        HTTPD_LISTEN_DIRECTIVES=(
+            httpinstance.HTTPInstance._split_httpd_listen_directives()),
+        HTTPD_SERVER_NAME_DIRECTIVE=(
+            httpinstance.HTTPInstance._split_httpd_server_name_directive(fqdn)),
     )
+
+    if getattr(api.env, 'ipa_ipv4_address', None):
+        main_httpd_conf = os.path.join(
+            paths.ETC_HTTPD_DIR, 'conf', 'httpd.conf')
+        if os.path.isfile(main_httpd_conf):
+            fstore.backup_file(main_httpd_conf)
+            directivesetter.set_directive(
+                main_httpd_conf, 'Listen', None, quotes=False)
+        directivesetter.set_directive(
+            paths.HTTPD_SSL_SITE_CONF, 'Listen', None, quotes=False)
 
     subject_base = find_subject_base()
     if subject_base:

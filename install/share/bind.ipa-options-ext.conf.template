@@ -11,8 +11,8 @@
  * allow-query-cache { trusted_network; };
  */
 
-/* turns on IPv6 for port 53, IPv4 is on by default for all ifaces */
-listen-on-v6 { any; };
+/* default listener policy; split DNS endpoint mode manages this in named.conf */
+$NAMED_DEFAULT_LISTEN_OPTIONS
 
 /* dnssec-enable is obsolete and 'yes' by default */
 dnssec-validation $NAMED_DNSSEC_VALIDATION;

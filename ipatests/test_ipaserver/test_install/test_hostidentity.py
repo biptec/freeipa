@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 
 from ipalib import errors
+from ipapython.kerberos import Principal
 from ipaserver.install import hostidentity
 
 
@@ -199,3 +200,87 @@ def test_replica_prepare_restores_host_key_after_generation_failure():
         call('master.example.test', IPA_HOST, REALM),
         call('master.example.test', SYSTEM_HOST, REALM),
     ]
+
+
+def test_validate_dual_stack_service_addresses_orders_families():
+    ipv6 = MagicMock(version=6)
+    ipv6.__str__.return_value = '2a07:e580:a10::10'
+    ipv6.get_matching_interface.return_value = object()
+    ipv4 = MagicMock(version=4)
+    ipv4.__str__.return_value = '10.16.16.90'
+    ipv4.get_matching_interface.return_value = object()
+
+    result = hostidentity.validate_dual_stack_service_addresses(
+        'Directory Controller', [ipv6, ipv4])
+
+    assert result == (ipv4, ipv6)
+
+
+def test_validate_dual_stack_service_addresses_rejects_missing_family():
+    ipv4a = MagicMock(version=4)
+    ipv4a.get_matching_interface.return_value = object()
+    ipv4b = MagicMock(version=4)
+    ipv4b.get_matching_interface.return_value = object()
+
+    with pytest.raises(ValueError, match='exactly one IPv4 and one IPv6'):
+        hostidentity.validate_dual_stack_service_addresses(
+            'DNS service', [ipv4a, ipv4b])
+
+
+def test_validate_dual_stack_service_addresses_rejects_nonlocal_address():
+    ipv4 = MagicMock(version=4)
+    ipv4.__str__.return_value = '10.16.16.90'
+    ipv4.get_matching_interface.return_value = None
+    ipv6 = MagicMock(version=6)
+    ipv6.__str__.return_value = '2a07:e580:a10::10'
+    ipv6.get_matching_interface.return_value = object()
+
+    with pytest.raises(ValueError, match='not configured on a local interface'):
+        hostidentity.validate_dual_stack_service_addresses(
+            'Directory Controller', [ipv4, ipv6])
+
+
+def test_validate_distinct_service_subnets_rejects_shared_ipv4_network():
+    directory_v4 = MagicMock(version=4)
+    directory_v6 = MagicMock(version=6)
+    dns_v4 = MagicMock(version=4)
+    dns_v6 = MagicMock(version=6)
+
+    directory_v4.get_matching_interface.return_value.ifnet.cidr = '10.0.0.0/24'
+    dns_v4.get_matching_interface.return_value.ifnet.cidr = '10.0.0.0/24'
+    directory_v6.get_matching_interface.return_value.ifnet.cidr = (
+        '2001:db8:1::/64')
+    dns_v6.get_matching_interface.return_value.ifnet.cidr = '2001:db8:2::/64'
+
+    with pytest.raises(ValueError, match='different IPv4 subnets'):
+        hostidentity.validate_distinct_service_subnets(
+            [directory_v4, directory_v6], [dns_v4, dns_v6])
+
+
+def test_validate_distinct_service_subnets_accepts_distinct_networks():
+    addresses = [MagicMock(version=4), MagicMock(version=6),
+                 MagicMock(version=4), MagicMock(version=6)]
+    networks = ['10.0.0.0/24', '2001:db8:1::/64',
+                '10.0.1.0/24', '2001:db8:2::/64']
+    for address, network in zip(addresses, networks):
+        address.get_matching_interface.return_value.ifnet.cidr = network
+
+    hostidentity.validate_distinct_service_subnets(
+        addresses[:2], addresses[2:])
+
+
+def test_verify_machine_identity_accepts_typed_principals():
+    target = f'host/{SYSTEM_HOST}@{REALM}'
+    source = f'host/{IPA_HOST}@{REALM}'
+    entry = MagicMock()
+    entry.get.return_value = [Principal(source), Principal(target)]
+    entry.single_value = {
+        'krbcanonicalname': Principal(target),
+        'fqdn': SYSTEM_HOST,
+    }
+    api_instance = MagicMock()
+    api_instance.Backend.ldap2.get_entry.return_value = entry
+
+    with patch.object(hostidentity, '_host_dn', return_value='host-dn'):
+        hostidentity.verify_machine_identity(
+            IPA_HOST, SYSTEM_HOST, REALM, api_instance=api_instance)
