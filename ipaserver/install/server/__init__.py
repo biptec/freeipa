@@ -246,6 +246,15 @@ class ServerInstallInterface(ServerCertificateInstallInterface,
         description="fully qualified name of this host",
     )
 
+    ipa_hostname = knob(
+        str, None,
+        description=("canonical FQDN used by IPA server services while "
+                     "--hostname remains the machine identity"),
+        cli_names='--ipa-hostname',
+        cli_metavar='FQDN',
+    )
+    ipa_hostname = enroll_only(ipa_hostname)
+
     ca_cert_files = extend_knob(
         client.ClientInstallInterface.ca_cert_files,
         description="File containing CA certificates for the service "

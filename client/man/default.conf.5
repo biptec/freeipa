@@ -96,7 +96,10 @@ Specifies whether the CA is acting as an RA agent, such as when dogtag is being 
 Specifies whether an IPA client should attempt to fall back and try other services if the first connection fails.
 .TP
 .B host <hostname>
-Specifies the local system hostname.
+Specifies the canonical IPA server hostname. In a normal deployment this is also the local system hostname. Servers installed with a distinct IPA service hostname keep the service identity in this option.
+.TP
+.B system_hostname <hostname>
+Specifies the machine hostname when it intentionally differs from the canonical IPA server hostname. This option is written by split-hostname server installation and is used by components that must reason about the operating-system identity rather than IPA service discovery.
 .TP
 .B http_timeout <seconds>
 Timeout for HTTP blocking requests (e.g. connection). The default value is 30 seconds.

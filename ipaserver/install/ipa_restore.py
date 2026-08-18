@@ -347,10 +347,10 @@ class Restore(admintool.AdminTool):
         logger.info("Performing %s restore from %s backup",
                     restore_type, self.backup_type)
 
-        if self.backup_host != FQDN:
+        if self.backup_system_hostname != FQDN:
             raise admintool.ScriptError(
-                "Host name %s does not match backup name %s" %
-                (FQDN, self.backup_host))
+                "System host name %s does not match backup machine name %s" %
+                (FQDN, self.backup_system_hostname))
 
         if self.backup_ipa_version != str(version.VERSION):
             logger.warning(
@@ -830,6 +830,13 @@ class Restore(admintool.AdminTool):
         self.backup_type = config.get('ipa', 'type')
         self.backup_time = config.get('ipa', 'time')
         self.backup_host = config.get('ipa', 'host')
+        if config.has_option('ipa', 'system_hostname'):
+            self.backup_system_hostname = config.get(
+                'ipa', 'system_hostname')
+        else:
+            # Backward compatibility with backups made before split-hostname
+            # metadata was introduced.
+            self.backup_system_hostname = self.backup_host
         self.backup_ipa_version = config.get('ipa', 'ipa_version')
         self.backup_version = config.get('ipa', 'version')
         # we can assume that returned object is string and it has .split()

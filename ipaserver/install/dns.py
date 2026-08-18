@@ -24,7 +24,6 @@ from ipalib import x509
 from ipalib.install import hostname, sysrestore, certmonger
 from ipalib.install.service import enroll_only, prepare_only
 from ipalib.install import dnsforwarders
-from ipalib.constants import FQDN
 from ipaplatform.paths import paths
 from ipaplatform.constants import constants
 from ipaplatform import services
@@ -121,8 +120,9 @@ def _request_cert_for_dns_over_tls(options):
         key = paths.BIND_DNS_OVER_TLS_KEY
         certmonger.request_and_wait_for_cert(
             certpath=(cert, key),
-            principal='DNS/%s@%s' % (FQDN, api.env.realm),
-            subject=str(DN(('CN', FQDN), default_subject_base(api.env.realm))),
+            principal='DNS/%s@%s' % (api.env.host, api.env.realm),
+            subject=str(DN(('CN', api.env.host),
+                           default_subject_base(api.env.realm))),
             storage="FILE"
         )
         constants.NAMED_USER.chown(cert, gid=constants.NAMED_GROUP.gid)
@@ -163,7 +163,7 @@ def _setup_dns_over_tls(options):
         sr.disable()
 
     api.Command.dnsserver_mod(
-        FQDN,
+        api.env.host,
         idnsforwarders="127.0.0.55",
         idnsforwardpolicy="first"
     )

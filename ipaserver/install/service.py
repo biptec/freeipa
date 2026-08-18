@@ -299,7 +299,7 @@ class Service:
         self.steps = []
         self.output_fd = sys.stdout
 
-        self.fqdn = FQDN
+        self.fqdn = getattr(api.env, 'host', FQDN)
 
         if sstore:
             self.sstore = sstore
