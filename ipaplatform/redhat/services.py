@@ -139,6 +139,14 @@ class RedHatDirectoryService(RedHatService):
 
     @contextlib.contextmanager
     def __wait(self, instance_name, wait, ldapi):
+        # Split-hostname servers deliberately do not expose LDAP/LDAPS on
+        # loopback TCP. The generic systemd port probe would therefore wait
+        # for localhost:389/636 until timeout. Use the instance LDAPI socket
+        # as the Directory Server readiness probe for this deployment mode.
+        env = getattr(self.api, 'env', None)
+        if not ldapi and getattr(env, 'system_hostname', None):
+            ldapi = True
+
         if ldapi:
             instance_name = self.service_instance(instance_name)
             if instance_name.endswith('.service'):

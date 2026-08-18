@@ -101,6 +101,21 @@ Specifies the canonical IPA server hostname. In a normal deployment this is also
 .B system_hostname <hostname>
 Specifies the machine hostname when it intentionally differs from the canonical IPA server hostname. This option is written by split-hostname server installation and is used by components that must reason about the operating-system identity rather than IPA service discovery.
 .TP
+.B ipa_ipv4_address <IPv4 address>
+Explicit IPv4 service address of the canonical IPA/Directory Controller identity in split-hostname deployments.
+.TP
+.B ipa_ipv6_address <IPv6 address>
+Explicit IPv6 service address of the canonical IPA/Directory Controller identity in split-hostname deployments.
+.TP
+.B dns_hostname <hostname>
+Network-facing hostname of the integrated DNS service when it differs from the canonical IPA server hostname.
+.TP
+.B dns_ipv4_address <IPv4 address>
+Explicit IPv4 address of the integrated DNS service in split-hostname deployments.
+.TP
+.B dns_ipv6_address <IPv6 address>
+Explicit IPv6 address of the integrated DNS service in split-hostname deployments.
+.TP
 .B http_timeout <seconds>
 Timeout for HTTP blocking requests (e.g. connection). The default value is 30 seconds.
 .TP

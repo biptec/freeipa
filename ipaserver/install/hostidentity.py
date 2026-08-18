@@ -41,6 +41,50 @@ SERVICE_PRINCIPAL_PREFIXES = (
 # 389-DS updates member, uniqueMember, owner and seeAlso on modrdn by
 # default. FreeIPA stores host DNs in additional relation attributes, so the
 # split-hostname transition updates all host-relevant DN references explicitly.
+def validate_dual_stack_service_addresses(label, addresses):
+    """Validate one explicit IPv4 + one explicit IPv6 local service address."""
+    if not addresses:
+        raise ValueError(
+            '{0} requires exactly one IPv4 and one IPv6 address'.format(label)
+        )
+
+    addresses = list(addresses)
+    ipv4 = [address for address in addresses if address.version == 4]
+    ipv6 = [address for address in addresses if address.version == 6]
+    if len(addresses) != 2 or len(ipv4) != 1 or len(ipv6) != 1:
+        raise ValueError(
+            '{0} requires exactly one IPv4 and one IPv6 address'.format(label)
+        )
+
+    missing = [
+        address for address in addresses
+        if not address.get_matching_interface()
+    ]
+    if missing:
+        raise ValueError(
+            '{0} address(es) are not configured on a local interface: {1}'
+            .format(label, ', '.join(str(address) for address in missing))
+        )
+
+    return ipv4[0], ipv6[0]
+
+
+def validate_distinct_service_subnets(
+        directory_addresses, dns_addresses):
+    """Require Directory and DNS endpoints to live in distinct L3 networks."""
+    for directory_address, dns_address in zip(
+            directory_addresses, dns_addresses):
+        directory_interface = directory_address.get_matching_interface()
+        dns_interface = dns_address.get_matching_interface()
+        if directory_interface is None or dns_interface is None:
+            raise ValueError('service address is not configured locally')
+        if directory_interface.ifnet.cidr == dns_interface.ifnet.cidr:
+            raise ValueError(
+                'Directory Controller and DNS service must use different {0} '
+                'subnets'.format(
+                    'IPv4' if directory_address.version == 4 else 'IPv6'))
+
+
 HOST_DN_REFERENCE_ATTRIBUTES = (
     'member',
     'uniquemember',
@@ -141,9 +185,11 @@ def transition_host_entry(
     source_principal = _host_principal(source_hostname, realm)
     target_principal = _host_principal(target_hostname, realm)
     principals = list(entry.get('krbprincipalname', ()))
+    principal_names = {str(value) for value in principals}
     for principal in (source_principal, target_principal):
-        if principal not in principals:
+        if principal not in principal_names:
             principals.append(principal)
+            principal_names.add(principal)
 
     entry['krbprincipalname'] = principals
     entry['krbcanonicalname'] = [target_principal]
@@ -197,7 +243,8 @@ def _add_service_principal_aliases(
             )
         entry = entries[0]
         principals = list(entry.get('krbprincipalname', ()))
-        if alias not in principals:
+        principal_names = {str(value) for value in principals}
+        if alias not in principal_names:
             principals.append(alias)
             entry['krbprincipalname'] = principals
             ldap.update_entry(entry)
@@ -291,11 +338,12 @@ def verify_machine_identity(
     entry = ldap.get_entry(_host_dn(system_hostname, api_instance))
     target_principal = _host_principal(system_hostname, realm)
     ipa_principal = _host_principal(ipa_hostname, realm)
-    principals = entry.get('krbprincipalname', ())
+    principals = {str(value) for value in entry.get('krbprincipalname', ())}
 
     if target_principal not in principals or ipa_principal not in principals:
         raise RuntimeError('Host principal aliases are incomplete')
-    if entry.single_value.get('krbcanonicalname') != target_principal:
+    canonical = entry.single_value.get('krbcanonicalname')
+    if canonical is None or str(canonical) != target_principal:
         raise RuntimeError('System host principal is not canonical')
     if entry.single_value.get('fqdn') != system_hostname:
         raise RuntimeError('Host entry FQDN was not finalized')
@@ -386,8 +434,51 @@ def _restore_single_hostname_config(system_hostname, fstore=None):
         [conf.setSection('global', [
             conf.setOption('host', system_hostname),
             conf.rmOption('system_hostname'),
+            conf.rmOption('ipa_ipv4_address'),
+            conf.rmOption('ipa_ipv6_address'),
+            conf.rmOption('dns_hostname'),
+            conf.rmOption('dns_ipv4_address'),
+            conf.rmOption('dns_ipv6_address'),
         ])],
     )
+
+
+def _ensure_local_hosts_records(hostname, addresses):
+    """Add deterministic /etc/hosts entries and return lines we added."""
+    with open(paths.HOSTS, 'r') as f:
+        current = f.readlines()
+
+    existing = set()
+    for line in current:
+        fields = line.partition('#')[0].split()
+        if len(fields) > 1:
+            existing.update(
+                (fields[0], name) for name in fields[1:])
+
+    added = []
+    shortname = hostname.split('.', 1)[0]
+    for address in addresses or ():
+        address = str(address)
+        if (address, hostname) in existing:
+            continue
+        line = '{}\t{} {}\n'.format(address, hostname, shortname)
+        with open(paths.HOSTS, 'a') as f:
+            f.write(line)
+        added.append(line)
+        existing.add((address, hostname))
+    return added
+
+
+def _remove_local_hosts_records(lines):
+    if not lines:
+        return
+    remove = set(lines)
+    with open(paths.HOSTS, 'r') as f:
+        current = f.readlines()
+    with open(paths.HOSTS, 'w') as f:
+        for line in current:
+            if line not in remove:
+                f.write(line)
 
 
 def _remove_local_host_keytab(hostname, realm):
@@ -420,7 +511,7 @@ def _generate_remote_host_keytab(master_hostname, hostname, realm):
 
 def prepare_replica_identity(
         system_hostname, ipa_hostname, realm, master_hostname,
-        remote_ldap, remote_api, fstore, sstore):
+        remote_ldap, remote_api, fstore, sstore, service_ip_addresses=()):
     """Prepare an enrolled client for stock replica promotion.
 
     The remote host object and local client identity are temporarily moved to
@@ -447,6 +538,8 @@ def prepare_replica_identity(
             'is not already a member of the ipaservers host group'
         )
 
+    added_hosts_records = _ensure_local_hosts_records(
+        ipa_hostname, service_ip_addresses)
     transitioned = False
     key_removed = False
     key_generated = False
@@ -515,12 +608,18 @@ def prepare_replica_identity(
                 tasks.set_hostname(system_hostname)
         except Exception:
             logger.exception('Failed to roll back operating-system hostname')
+        try:
+            _remove_local_hosts_records(added_hosts_records)
+        except Exception:
+            logger.exception('Failed to roll back /etc/hosts service records')
         raise
+
+    return added_hosts_records
 
 
 def rollback_replica_identity(
         system_hostname, ipa_hostname, realm, master_hostname,
-        remote_ldap, remote_api, fstore, sstore):
+        remote_ldap, remote_api, fstore, sstore, added_hosts_records=()):
     """Return a prepared-but-not-promoted replica to its client identity."""
     transition_host_entry(
         remote_ldap, ipa_hostname, system_hostname, realm, remote_api)
@@ -537,3 +636,4 @@ def rollback_replica_identity(
         tasks.restore_hostname(fstore, sstore)
     else:
         tasks.set_hostname(system_hostname)
+    _remove_local_hosts_records(added_hosts_records)

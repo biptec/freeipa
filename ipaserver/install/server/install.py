@@ -545,7 +545,13 @@ def install_check(installer):
         host_name = host_default
 
     try:
-        verify_fqdn(host_name, options.no_host_dns)
+        if options.ipa_hostname:
+            # Explicit Directory Controller addresses are authoritative for
+            # split mode; installation must not depend on pre-existing DNS.
+            verify_fqdn(
+                host_name, no_host_dns=True, local_hostname=False)
+        else:
+            verify_fqdn(host_name, options.no_host_dns)
     except BadHostError as e:
         raise ScriptError(e)
 
@@ -564,6 +570,66 @@ def install_check(installer):
         system_hostname = system_hostname.lower()
         logger.debug("will preserve system_hostname: %s\n",
                      system_hostname)
+
+    directory_ip_addresses = None
+    directory_ipv4 = None
+    directory_ipv6 = None
+    dns_hostname = getattr(options, 'dns_hostname', None)
+    dns_ip_addresses = getattr(options, 'dns_ip_addresses', None)
+    dns_ipv4 = None
+    dns_ipv6 = None
+
+    if system_hostname is not None:
+        if system_hostname == host_name:
+            raise ScriptError(
+                '--hostname and --ipa-hostname must identify different hosts '
+                'in split-hostname mode')
+        try:
+            directory_ipv4, directory_ipv6 = (
+                hostidentity.validate_dual_stack_service_addresses(
+                    'Directory Controller', options.ip_addresses))
+        except ValueError as e:
+            raise ScriptError(e)
+        directory_ip_addresses = [directory_ipv4, directory_ipv6]
+
+        if options.setup_dns:
+            if not dns_hostname:
+                raise ScriptError(
+                    '--dns-hostname is required with --setup-dns in '
+                    'split-hostname mode')
+            try:
+                verify_fqdn(
+                    dns_hostname, no_host_dns=True, local_hostname=False)
+            except BadHostError as e:
+                raise ScriptError(e)
+            dns_hostname = dns_hostname.lower()
+            if dns_hostname in {host_name, system_hostname}:
+                raise ScriptError(
+                    '--dns-hostname must differ from both --hostname and '
+                    '--ipa-hostname in split-hostname mode')
+            try:
+                dns_ipv4, dns_ipv6 = (
+                    hostidentity.validate_dual_stack_service_addresses(
+                        'DNS service', dns_ip_addresses))
+            except ValueError as e:
+                raise ScriptError(e)
+            if set(directory_ip_addresses).intersection({dns_ipv4, dns_ipv6}):
+                raise ScriptError(
+                    'Directory Controller and DNS service addresses must be '
+                    'different')
+            try:
+                hostidentity.validate_distinct_service_subnets(
+                    directory_ip_addresses, [dns_ipv4, dns_ipv6])
+            except ValueError as e:
+                raise ScriptError(e)
+            options.dns_hostname = dns_hostname
+            options.dns_ip_addresses = [dns_ipv4, dns_ipv6]
+        elif dns_hostname or dns_ip_addresses:
+            raise ScriptError(
+                '--dns-hostname/--dns-ip-address require --setup-dns')
+    elif dns_hostname or dns_ip_addresses:
+        raise ScriptError(
+            '--dns-hostname/--dns-ip-address require --ipa-hostname')
 
     if not options.domain_name:
         domain_name = read_domain_name(host_name[host_name.find(".")+1:],
@@ -707,6 +773,12 @@ def install_check(installer):
     )
     if system_hostname is not None:
         cfg['system_hostname'] = system_hostname
+        cfg['ipa_ipv4_address'] = str(directory_ipv4)
+        cfg['ipa_ipv6_address'] = str(directory_ipv6)
+        if dns_hostname is not None:
+            cfg['dns_hostname'] = dns_hostname
+            cfg['dns_ipv4_address'] = str(dns_ipv4)
+            cfg['dns_ipv6_address'] = str(dns_ipv6)
     if options.key_type_size:
         cfg['key_type_size'] = options.key_type_size
     if setup_ca:
@@ -734,8 +806,17 @@ def install_check(installer):
         ipaconf.setOption('mode', 'production')
     ]
     if system_hostname is not None:
-        gopts.append(ipaconf.setOption(
-            'system_hostname', system_hostname))
+        gopts.extend([
+            ipaconf.setOption('system_hostname', system_hostname),
+            ipaconf.setOption('ipa_ipv4_address', str(directory_ipv4)),
+            ipaconf.setOption('ipa_ipv6_address', str(directory_ipv6)),
+        ])
+        if dns_hostname is not None:
+            gopts.extend([
+                ipaconf.setOption('dns_hostname', dns_hostname),
+                ipaconf.setOption('dns_ipv4_address', str(dns_ipv4)),
+                ipaconf.setOption('dns_ipv6_address', str(dns_ipv6)),
+            ])
 
     if setup_ca:
         gopts.extend([
@@ -767,7 +848,11 @@ def install_check(installer):
     if options.setup_kra:
         kra.install_check(api, None, options)
 
-    if options.setup_dns:
+    if system_hostname is not None:
+        ip_addresses = directory_ip_addresses
+        if options.setup_dns:
+            dns.install_check(False, api, False, options, host_name)
+    elif options.setup_dns:
         dns.install_check(False, api, False, options, host_name)
         ip_addresses = dns.ip_addresses
     else:
@@ -806,7 +891,16 @@ def install_check(installer):
     else:
         print("IPA hostname:   %s" % host_name)
         print("System hostname:%s" % (' ' + system_hostname))
-    print("IP address(es): %s" % ", ".join(str(ip) for ip in ip_addresses))
+    if system_hostname is None:
+        print("IP address(es): %s" %
+              ", ".join(str(ip) for ip in ip_addresses))
+    else:
+        print("Directory IPv4: %s" % directory_ipv4)
+        print("Directory IPv6: %s" % directory_ipv6)
+        if options.setup_dns:
+            print("DNS hostname:   %s" % dns_hostname)
+            print("DNS IPv4:       %s" % dns_ipv4)
+            print("DNS IPv6:       %s" % dns_ipv6)
     print("Domain name:    %s" % domain_name)
     print("Realm name:     %s" % realm_name)
     print()
@@ -1050,6 +1144,9 @@ def install(installer):
     # is created. DS is restarted in the process.
     service.print_msg("Applying LDAP updates")
     ds.apply_updates()
+    if options._system_hostname is not None:
+        service.print_msg("Restricting Directory Server listeners")
+        ds.configure_split_hostname_listeners()
 
     # Restart krb after configurations have been changed
     service.print_msg("Restarting the KDC")

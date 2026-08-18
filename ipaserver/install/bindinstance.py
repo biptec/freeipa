@@ -657,6 +657,8 @@ class BindInstance(service.Service):
         self.domain = None
         self.host = None
         self.ip_addresses = ()
+        self.dns_hostname = None
+        self.dns_ip_addresses = ()
         self.forwarders = ()
         self.forward_policy = None
         self.zonemgr = None
@@ -671,9 +673,18 @@ class BindInstance(service.Service):
               forward_policy, reverse_zones, zonemgr=None,
               no_dnssec_validation=False, dns_over_tls=False,
               dns_over_tls_cert=None, dns_over_tls_key=None,
-              dns_policy=None):
-        """Setup bindinstance for installation
+              dns_policy=None, dns_hostname=None, dns_ip_addresses=None):
+        """Setup bindinstance for installation.
+
+        ``fqdn`` and ``ip_addresses`` describe the IPA server identity.
+        Optional DNS endpoint values only control network-facing DNS records
+        and listeners; Kerberos and dyndb identities remain bound to ``fqdn``.
         """
+        self.ip_addresses = ip_addresses
+        self.dns_hostname = dns_hostname or fqdn
+        self.dns_ip_addresses = (
+            dns_ip_addresses if dns_ip_addresses is not None else ip_addresses
+        )
         self.setup_templating(
             fqdn=fqdn,
             realm_name=realm_name,
@@ -684,7 +695,6 @@ class BindInstance(service.Service):
             dns_over_tls_key=dns_over_tls_key,
             dns_policy=dns_policy
         )
-        self.ip_addresses = ip_addresses
         self.forwarders = forwarders
         self.forward_policy = forward_policy
         self.reverse_zones = reverse_zones
@@ -717,6 +727,16 @@ class BindInstance(service.Service):
         self.realm = realm_name
         self.domain = domain_name
         self.host = fqdn.split(".")[0]
+        if self.dns_hostname is None:
+            self.dns_hostname = getattr(
+                self.api.env, 'dns_hostname', None) or fqdn
+        if not self.dns_ip_addresses:
+            stored_addresses = []
+            for key in ('dns_ipv4_address', 'dns_ipv6_address'):
+                value = getattr(self.api.env, key, None)
+                if value:
+                    stored_addresses.append(ipautil.CheckedIPAddress(value))
+            self.dns_ip_addresses = tuple(stored_addresses)
         self.suffix = ipautil.realm_to_suffix(self.realm)
         self.no_dnssec_validation = no_dnssec_validation
         self.dns_over_tls = dns_over_tls
@@ -768,6 +788,12 @@ class BindInstance(service.Service):
         for ip_address in self.ip_addresses:
             if installutils.record_in_hosts(str(ip_address), self.fqdn) is None:
                 installutils.add_record_to_hosts(str(ip_address), self.fqdn)
+        if self.dns_hostname != self.fqdn:
+            for ip_address in self.dns_ip_addresses:
+                if installutils.record_in_hosts(
+                        str(ip_address), self.dns_hostname) is None:
+                    installutils.add_record_to_hosts(
+                        str(ip_address), self.dns_hostname)
 
         # Make sure generate-rndc-key.sh runs before named restart
         self.step("generating rndc key file", self.__generate_rndc_key)
@@ -890,6 +916,34 @@ class BindInstance(service.Service):
         return dnssec_validation
 
     def _setup_sub_dict(self):
+        split_dns_endpoint = (
+            self.dns_hostname != self.fqdn or
+            set(self.dns_ip_addresses) != set(self.ip_addresses)
+        )
+        named_service_listen_options = ""
+        named_default_listen_options = "listen-on-v6 { any; };"
+        dns_ipv4 = [
+            str(address) for address in self.dns_ip_addresses
+            if address.version == 4
+        ]
+        dns_ipv6 = [
+            str(address) for address in self.dns_ip_addresses
+            if address.version == 6
+        ]
+
+        if split_dns_endpoint and self.dns_ip_addresses:
+            plain_ipv4 = ['127.0.0.1'] + dns_ipv4
+            plain_ipv6 = ['::1'] + dns_ipv6
+            if self.dns_over_tls and self.dns_policy == 'enforced':
+                plain_ipv4 = ['127.0.0.1']
+                plain_ipv6 = ['::1']
+            named_service_listen_options = textwrap.dedent("""\
+                \tlisten-on { %s; };
+                \tlisten-on-v6 { %s; };
+            """ % ('; '.join(plain_ipv4), '; '.join(plain_ipv6)))
+            named_default_listen_options = (
+                '// listeners are managed by IPA split DNS endpoint mode')
+
         if paths.NAMED_CRYPTO_POLICY_FILE is not None:
             crypto_policy = 'include "{}";'.format(
                 paths.NAMED_CRYPTO_POLICY_FILE
@@ -904,13 +958,19 @@ class BindInstance(service.Service):
                     \tcert-file "{}";
                 }};
             """).format(self.dns_over_tls_key, self.dns_over_tls_cert)
-            unencrypted_iface = ("127.0.0.1" if self.dns_policy == "enforced"
-                                 else "any")
-            named_tls_options = textwrap.dedent("""\
-                \tlisten-on { %s; };
-                \tlisten-on tls local-tls { any; };
-                \tlisten-on-v6 tls local-tls { any; };
-            """ % unencrypted_iface)
+            if split_dns_endpoint and self.dns_ip_addresses:
+                named_tls_options = textwrap.dedent("""\
+                    \tlisten-on tls local-tls { %s; };
+                    \tlisten-on-v6 tls local-tls { %s; };
+                """ % ('; '.join(dns_ipv4), '; '.join(dns_ipv6)))
+            else:
+                unencrypted_iface = (
+                    "127.0.0.1" if self.dns_policy == "enforced" else "any")
+                named_tls_options = textwrap.dedent("""\
+                    \tlisten-on { %s; };
+                    \tlisten-on tls local-tls { any; };
+                    \tlisten-on-v6 tls local-tls { any; };
+                """ % unencrypted_iface)
         else:
             named_tls_options = ""
             named_tls_conf = ""
@@ -934,6 +994,8 @@ class BindInstance(service.Service):
             NAMED_DATA_DIR=constants.NAMED_DATA_DIR,
             NAMED_ZONE_COMMENT=constants.NAMED_ZONE_COMMENT,
             NAMED_DNSSEC_VALIDATION=self._get_dnssec_validation(),
+            NAMED_SERVICE_LISTEN_OPTIONS=named_service_listen_options,
+            NAMED_DEFAULT_LISTEN_OPTIONS=named_default_listen_options,
             NAMED_DNS_OVER_TLS_OPTIONS_CONF=named_tls_options,
             NAMED_DNS_OVER_TLS_CONF=named_tls_conf,
         )
@@ -973,14 +1035,14 @@ class BindInstance(service.Service):
     def __setup_zone(self):
         # Always use force=True as named is not set up yet
         add_zone(self.domain, self.zonemgr, dns_backup=self.dns_backup,
-                 ns_hostname=self.api.env.host, force=True,
+                 ns_hostname=self.dns_hostname, force=True,
                  skip_overlap_check=True, api=self.api)
 
         add_rr(self.domain, "_kerberos", "TXT", self.realm, api=self.api)
 
     def __add_self_ns(self):
         # add NS record to all zones
-        ns_hostname = normalize_zone(self.api.env.host)
+        ns_hostname = normalize_zone(self.dns_hostname)
         result = self.api.Command.dnszone_find()
         for zone in result['result']:
             zone = unicode(zone['idnsname'][0])  # we need unicode due to backup
@@ -991,7 +1053,7 @@ class BindInstance(service.Service):
     def __setup_reverse_zone(self):
         # Always use force=True as named is not set up yet
         for reverse_zone in self.reverse_zones:
-            add_zone(reverse_zone, self.zonemgr, ns_hostname=self.api.env.host,
+            add_zone(reverse_zone, self.zonemgr, ns_hostname=self.dns_hostname,
                      dns_backup=self.dns_backup, force=True,
                      skip_overlap_check=True, api=self.api)
 
@@ -1014,6 +1076,9 @@ class BindInstance(service.Service):
 
     def __add_self(self):
         self.__add_master_records(self.fqdn, self.ip_addresses)
+        if self.dns_hostname != self.fqdn:
+            self.__add_master_records(
+                self.dns_hostname, self.dns_ip_addresses)
 
     def __add_others(self):
         entries = api.Backend.ldap2.get_entries(
@@ -1160,7 +1225,8 @@ class BindInstance(service.Service):
         ensure_dnsserver_container_exists(api.Backend.ldap2, self.api)
         try:
             self.api.Command.dnsserver_add(
-                self.fqdn, idnssoamname=DNSName(self.fqdn).make_absolute(),
+                self.fqdn,
+                idnssoamname=DNSName(self.dns_hostname).make_absolute(),
             )
         except errors.DuplicateEntry:
             # probably reinstallation of DNS
@@ -1182,7 +1248,7 @@ class BindInstance(service.Service):
         nameservers = set()
         resolve1_enabled = dnsforwarders.detect_resolve1_resolv_conf()
 
-        for ip_address in self.ip_addresses:
+        for ip_address in self.dns_ip_addresses:
             if ip_address.version == 4:
                 nameservers.add("127.0.0.1")
             elif ip_address.version == 6:

@@ -276,6 +276,38 @@ class KrbInstance(service.Service):
         includes = 'includedir {}'.format(paths.COMMON_KRB5_CONF_DIR)
 
         fips_enabled = tasks.is_fips_enabled()
+        directory_ipv4 = getattr(api.env, 'ipa_ipv4_address', None)
+        directory_ipv6 = getattr(api.env, 'ipa_ipv6_address', None)
+        if directory_ipv4 and directory_ipv6:
+            kdc_endpoints = [
+                '127.0.0.1:88', '[::1]:88',
+                '{}:88'.format(directory_ipv4),
+                '[{}]:88'.format(directory_ipv6),
+            ]
+            kdc_listen_directives = (
+                ' kdc_listen = {0}\n kdc_tcp_listen = {0}'
+                .format(' '.join(kdc_endpoints))
+            )
+            kpasswd_endpoints = [
+                '127.0.0.1:464', '[::1]:464',
+                '{}:464'.format(directory_ipv4),
+                '[{}]:464'.format(directory_ipv6),
+            ]
+            kadmind_endpoints = [
+                '127.0.0.1:749', '[::1]:749',
+                '{}:749'.format(directory_ipv4),
+                '[{}]:749'.format(directory_ipv6),
+            ]
+            kadmin_listen_directives = (
+                '  kpasswd_listen = {0}\n  kadmind_listen = {1}'
+                .format(','.join(kpasswd_endpoints),
+                        ' '.join(kadmind_endpoints))
+            )
+        else:
+            kdc_listen_directives = (
+                ' kdc_ports = 88\n kdc_tcp_ports = 88')
+            kadmin_listen_directives = ''
+
         self.sub_dict = dict(FQDN=self.fqdn,
                              IP=self.ip,
                              PASSWORD=self.kdc_password,
@@ -292,6 +324,8 @@ class KrbInstance(service.Service):
                              CACERT_PEM=paths.CACERT_PEM,
                              KDC_CA_BUNDLE_PEM=paths.KDC_CA_BUNDLE_PEM,
                              CA_BUNDLE_PEM=paths.CA_BUNDLE_PEM,
+                             KDC_LISTEN_DIRECTIVES=kdc_listen_directives,
+                             KADMIN_LISTEN_DIRECTIVES=kadmin_listen_directives,
                              INCLUDES=includes,
                              FIPS='#' if fips_enabled else '')
 
