@@ -42,8 +42,8 @@ cp "$OUT/rpms"/*.rpm "$OUT/repo/"
 createrepo_c "$OUT/repo"
 
 VERSION_ID="${PACKAGE_VERSION}-${FEDORA_PACKAGE_RELEASE}.fc${TARGET_FEDORA}.biptec.${BIPTEC_RELEASE}"
-REPO_TAR="biptec-freeipa-${VERSION_ID}-${TARGET_ARCH}-repo.tar.gz"
-PATCH_TAR="biptec-freeipa-${VERSION_ID}-patches.tar.gz"
+REPO_TAR="freeipa-${VERSION_ID}-${TARGET_ARCH}-repo.tar.gz"
+PATCH_TAR="freeipa-${VERSION_ID}-patches.tar.gz"
 
 tar -C "$OUT" -czf "$OUT/$REPO_TAR" repo
 tar -C "$PATCH_DIR" -czf "$OUT/$PATCH_TAR" .
