@@ -1154,6 +1154,31 @@ class BindInstance(service.Service):
         else:
             dns_principal = p
 
+        # Keep the compatibility alias metadata aligned with the canonical
+        # DNS principal.  The legacy attribute is single-valued even when
+        # krbPrincipalName contains additional aliases.
+        entry = api.Backend.ldap2.get_entry(
+            dns_principal,
+            ['objectclass', 'krbcanonicalname', 'ipakrbprincipalalias'],
+        )
+        objectclasses = list(entry.get('objectclass', ()))
+        changed = False
+        if 'ipakrbprincipal' not in {
+                str(value).lower() for value in objectclasses}:
+            objectclasses.append('ipakrbprincipal')
+            entry['objectclass'] = objectclasses
+            changed = True
+        canonical = entry.single_value.get('krbcanonicalname') or self.principal
+        principal_alias = entry.single_value.get('ipakrbprincipalalias')
+        if principal_alias is None or str(principal_alias) != str(canonical):
+            entry['ipakrbprincipalalias'] = [str(canonical)]
+            changed = True
+        if changed:
+            try:
+                api.Backend.ldap2.update_entry(entry)
+            except errors.EmptyModlist:
+                pass
+
         # Make sure access is strictly reserved to the named user
         self.service_user.chown(self.keytab)
         os.chmod(self.keytab, 0o400)

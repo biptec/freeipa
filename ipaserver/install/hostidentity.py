@@ -229,7 +229,8 @@ def _add_service_principal_aliases(
         try:
             entries, _truncated = ldap.find_entries(
                 filter=search_filter,
-                attrs_list=['krbprincipalname', 'krbcanonicalname'],
+                attrs_list=['objectclass', 'krbprincipalname', 'krbcanonicalname',
+                            'ipakrbprincipalalias'],
                 base_dn=service_base,
             )
         except errors.NotFound:
@@ -243,10 +244,31 @@ def _add_service_principal_aliases(
         entry = entries[0]
         principals = list(entry.get('krbprincipalname', ()))
         principal_names = {str(value) for value in principals}
+        changed = False
         if alias not in principal_names:
             principals.append(alias)
             entry['krbprincipalname'] = principals
-            ldap.update_entry(entry)
+            changed = True
+
+        objectclasses = list(entry.get('objectclass', ()))
+        if 'ipakrbprincipal' not in {
+                str(value).lower() for value in objectclasses}:
+            objectclasses.append('ipakrbprincipal')
+            entry['objectclass'] = objectclasses
+            changed = True
+
+        canonical_value = entry.single_value.get('krbcanonicalname')
+        canonical_alias = str(canonical_value or canonical)
+        principal_alias = entry.single_value.get('ipakrbprincipalalias')
+        if principal_alias is None or str(principal_alias) != canonical_alias:
+            entry['ipakrbprincipalalias'] = [canonical_alias]
+            changed = True
+
+        if changed:
+            try:
+                ldap.update_entry(entry)
+            except errors.EmptyModlist:
+                pass
 
 
 def _persist_hostnames(ipa_hostname, system_hostname, fstore=None):
