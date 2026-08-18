@@ -79,7 +79,7 @@ BIPTEC RPM строится не из upstream `freeipa.spec.in`, а повер�
 
 1. проверяет точный Fedora dist-git commit;
 2. добавляет экспортированные BIPTEC patches;
-3. меняет только RPM `Release` на `N.biptec.M%{?dist}`;
+3. меняет только RPM `Release` на `N%{?dist}.biptec.M`;
 4. оставляет upstream signed source tarball и Fedora spec semantics.
 Текущая схема версии RPM:
 
@@ -103,7 +103,7 @@ Build script сам загружает Fedora source archive из dist-git looka
 Production host не должен компилировать FreeIPA. Основной release asset — архив вида:
 
 ```text
-biptec-freeipa-4.13.2-1.fc44.biptec.1-x86_64-repo.tar.gz
+freeipa-4.13.2-1.fc44.biptec.1-x86_64-repo.tar.gz
 ```
 
 После распаковки каталог `repo/` является обычным DNF repository с RPM и `repodata/`.
@@ -201,4 +201,5 @@ git push origin biptec-4.13.2-1
 ```
 
 Tag запускает тот же build pipeline заново. GitHub Release создаётся только если эта tagged build
-успешно завершилась. Не прикреплять вручную RPM из более раннего branch build к production release.
+успешно завершилась. Название GitHub Release должно в точности совпадать с именем tag (например,
+`biptec-4.13.2-1`). Не прикреплять вручную RPM из более раннего branch build к production release.
