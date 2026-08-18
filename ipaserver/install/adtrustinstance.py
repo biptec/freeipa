@@ -515,12 +515,30 @@ class ADTRUSTInstance(service.Service):
             except Exception:
                 pass
 
+    def configure_cldap_listener(self):
+        """Pin CLDAP to the Directory service identity in split mode."""
+        if not (getattr(api.env, 'ipa_ipv4_address', None) and
+                getattr(api.env, 'ipa_ipv6_address', None)):
+            return
+
+        plugin_dn = DN(('cn', 'ipa_cldap'), ('cn', 'plugins'), ('cn', 'config'))
+        try:
+            entry = api.Backend.ldap2.get_entry(
+                plugin_dn, ['nsslapd-listenhost'])
+        except errors.NotFound:
+            return
+        if entry.single_value.get('nsslapd-listenhost') == self.fqdn:
+            return
+        entry['nsslapd-listenhost'] = [self.fqdn]
+        try:
+            api.Backend.ldap2.update_entry(entry)
+        except errors.EmptyModlist:
+            pass
+
     def __add_cldap_module(self):
-        """
-        Add cldap directory server plugin configuration if it not already
-        exists.
-        """
+        """Add CLDAP plugin configuration and split listener identity."""
         self.__add_plugin_conf('CLDAP', 'ipa_cldap', 'ipa-cldap-conf.ldif')
+        self.configure_cldap_listener()
 
     def __add_sidgen_task(self):
         """

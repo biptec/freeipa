@@ -440,6 +440,65 @@ class Service:
             return default_dn
         return system_dn
 
+    def _split_service_principal_alias(self):
+        system_hostname = getattr(self.api.env, 'system_hostname', None)
+        if (not system_hostname or system_hostname == self.fqdn or
+                self.principal is None):
+            return None
+
+        marker = '/{0}@'.format(self.fqdn)
+        if marker not in self.principal:
+            return None
+        return self.principal.replace(
+            marker, '/{0}@'.format(system_hostname), 1)
+
+    def _ensure_split_service_metadata(self, alias, owner_dn):
+        dn = self.get_principal_dn(self.principal)
+        entry = self.api.Backend.ldap2.get_entry(
+            dn,
+            ['managedby', 'objectclass', 'krbprincipalname',
+             'krbcanonicalname', 'ipakrbprincipalalias'],
+        )
+        changed = False
+
+        principals = list(entry.get('krbprincipalname', ()))
+        if alias not in {str(value) for value in principals}:
+            principals.append(alias)
+            entry['krbprincipalname'] = principals
+            changed = True
+
+        objectclasses = list(entry.get('objectclass', ()))
+        if 'ipakrbprincipal' not in {
+                str(value).lower() for value in objectclasses}:
+            objectclasses.append('ipakrbprincipal')
+            entry['objectclass'] = objectclasses
+            changed = True
+
+        canonical = entry.single_value.get('krbcanonicalname') or self.principal
+        principal_alias = entry.single_value.get('ipakrbprincipalalias')
+        if principal_alias is None or str(principal_alias) != str(canonical):
+            entry['ipakrbprincipalalias'] = [str(canonical)]
+            changed = True
+
+        default_dn = DN(
+            ('fqdn', self.fqdn), ('cn', 'computers'), ('cn', 'accounts'),
+            self.suffix)
+        managedby = list(entry.get('managedby', ()))
+        managedby = [
+            owner_dn if value == default_dn else value for value in managedby
+        ]
+        if owner_dn not in managedby:
+            managedby.append(owner_dn)
+        if managedby != list(entry.get('managedby', ())):
+            entry['managedby'] = managedby
+            changed = True
+
+        if changed:
+            try:
+                self.api.Backend.ldap2.update_entry(entry)
+            except errors.EmptyModlist:
+                pass
+
     def move_service(self, principal):
         """
         Used to move a principal entry created by kadmin.local from
@@ -826,10 +885,22 @@ class Service:
             logger.debug("service %s container sucessfully removed", name)
 
     def _add_service_principal(self):
+        alias = self._split_service_principal_alias()
+        owner_dn = self._managed_host_dn()
+        default_dn = DN(
+            ('fqdn', self.fqdn), ('cn', 'computers'), ('cn', 'accounts'),
+            self.suffix)
+        options = {'force': True}
+        if owner_dn != default_dn:
+            options['skip_host_check'] = True
+
         try:
-            self.api.Command.service_add(self.principal, force=True)
+            self.api.Command.service_add(self.principal, **options)
         except errors.DuplicateEntry:
             pass
+
+        if alias is not None:
+            self._ensure_split_service_metadata(alias, owner_dn)
 
     def clean_previous_keytab(self, keytab=None):
         if keytab is None:
@@ -886,6 +957,10 @@ class Service:
         self._add_service_principal()
         self.clean_previous_keytab()
         self.run_getkeytab(self.api.env.ldap_uri, self.keytab, self.principal)
+        alias = self._split_service_principal_alias()
+        if alias is not None:
+            self.run_getkeytab(
+                self.api.env.ldap_uri, self.keytab, alias, retrieve=True)
         self.set_keytab_owner()
 
     def replica_ignore_initial_time_skew(self):

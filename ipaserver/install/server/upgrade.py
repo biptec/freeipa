@@ -320,6 +320,9 @@ def upgrade_adtrust_config():
     if not adtrustinstance.ipa_smb_conf_exists():
         return
 
+    adtrust = adtrustinstance.ADTRUSTInstance()
+    adtrust.configure_cldap_listener()
+
     logger.info("[Remove FILE: prefix from 'dedicated keytab file' "
                 "in Samba configuration]")
 
