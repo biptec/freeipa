@@ -257,6 +257,23 @@ class KrbInstance(service.Service):
         self.kpasswd.create_instance('KPASSWD', self.fqdn, self.suffix)
 
 
+    def configure_split_hostname_listeners(self):
+        """Regenerate KDC/kadmin listener configuration for split identity."""
+        directory_ipv4 = getattr(api.env, 'ipa_ipv4_address', None)
+        directory_ipv6 = getattr(api.env, 'ipa_ipv6_address', None)
+        if not (directory_ipv4 and directory_ipv6):
+            return
+
+        self.fqdn = self.fqdn or api.env.host
+        self.realm = self.realm or api.env.realm
+        self.domain = self.domain or api.env.domain
+        self.host = self.host or self.fqdn.split('.')[0]
+        self.ip = getattr(self, 'ip', None) or directory_ipv4
+        self.suffix = self.suffix or ipautil.realm_to_suffix(self.realm)
+        self.kdc_password = self.kdc_password or ''
+        self.__setup_sub_dict()
+        self.__template_file(paths.KRB5KDC_KDC_CONF, chmod=None)
+
     def __enable(self):
         self.backup_state("enabled", self.is_enabled())
         # We do not let the system start IPA components on its own,

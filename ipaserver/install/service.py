@@ -441,6 +441,13 @@ class Service:
         return system_dn
 
     def _split_service_principal_alias(self):
+        # Replica promotion temporarily runs under the Directory Controller
+        # identity. Service aliases for the machine identity are added only
+        # after promotion by finalize_machine_identity(), when local LDAP has
+        # administrative access and the host object has its final identity.
+        if self.promote:
+            return None
+
         system_hostname = getattr(self.api.env, 'system_hostname', None)
         if (not system_hostname or system_hostname == self.fqdn or
                 self.principal is None):
