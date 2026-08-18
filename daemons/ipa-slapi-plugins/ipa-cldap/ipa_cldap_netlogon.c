@@ -322,9 +322,13 @@ int ipa_cldap_netlogon(struct ipa_cldap_ctx *ctx,
         goto done;
     }
 
-    hostname = ipa_gethostfqdn();
-	if (hostname == NULL) {
-        ret = errno;
+    if (ctx->server_name != NULL) {
+        hostname = ctx->server_name;
+    } else {
+        hostname = ipa_gethostfqdn();
+    }
+    if (hostname == NULL) {
+        ret = errno ? errno : ENOMEM;
         goto done;
     }
     dot = strchr(hostname, '.');
