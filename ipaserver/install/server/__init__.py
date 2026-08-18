@@ -278,9 +278,9 @@ class ServerInstallInterface(ServerCertificateInstallInterface,
 
     dns_hostname = knob(
         str, None,
-        description=("network-facing FQDN of the integrated DNS service; "
-                     "the DNS Kerberos/backend identity remains the IPA "
-                     "server hostname"),
+        description=("canonical FQDN of the integrated DNS service, used "
+                     "for BIND server identity, DNS Kerberos principal, "
+                     "NS/SOA and DNS endpoint records"),
         cli_names='--dns-hostname',
         cli_metavar='FQDN',
     )

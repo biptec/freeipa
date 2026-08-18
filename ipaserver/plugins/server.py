@@ -258,8 +258,10 @@ class server_mod(LDAPUpdate):
             else:
                 ipalocation = u''
             try:
+                dns_server_id = bindinstance.dns_server_id_for_ipa_server(
+                    self.api, keys[0])
                 self.api.Command.dnsserver_mod(
-                    keys[0],
+                    dns_server_id,
                     setattr=[
                         u'idnsSubstitutionVariable;ipalocation={loc}'.format(
                             loc=ipalocation)
@@ -674,16 +676,22 @@ class server_del(LDAPDelete):
             # ldap principal to be cleaned later by topology plugin
             # necessary changes to a topology plugin are tracked
             # under https://pagure.io/freeipa/issue/7359
+            principal_filter = '(krbprincipalname=*/{}@{})'.format(
+                master, self.api.env.realm)
+            dns_server_id = bindinstance.dns_server_id_for_ipa_server(
+                self.api, master)
+            if dns_server_id != master:
+                principal_filter = (
+                    '(|{base}(krbprincipalname=DNS/{dns}@{realm}))'
+                    .format(
+                        base=principal_filter, dns=dns_server_id,
+                        realm=self.api.env.realm))
+
             if master == self.api.env.host:
-                filter = (
-                    '(&(krbprincipalname=*/{}@{})'
-                    '(!(krbprincipalname=ldap/*)))'
-                    .format(master, self.api.env.realm)
-                )
+                filter = '(&{}(!(krbprincipalname=ldap/*)))'.format(
+                    principal_filter)
             else:
-                filter = '(krbprincipalname=*/{}@{})'.format(
-                    master, self.api.env.realm
-                )
+                filter = principal_filter
 
             entries = ldap.get_entries(
                 self.api.env.basedn, ldap.SCOPE_SUBTREE, filter=filter
@@ -707,8 +715,13 @@ class server_del(LDAPDelete):
             return
 
         try:
+            dns_server_id = bindinstance.dns_server_id_for_ipa_server(
+                self.api, hostname)
             bindinstance.remove_master_dns_records(
                 hostname, self.api.env.realm)
+            if dns_server_id != hostname:
+                bindinstance.remove_master_dns_records(
+                    dns_server_id, self.api.env.realm)
             dnskeysyncinstance.remove_replica_public_keys(hostname)
         except Exception as e:
             self.add_message(
@@ -724,7 +737,9 @@ class server_del(LDAPDelete):
 
     def _cleanup_server_dns_config(self, hostname):
         try:
-            self.api.Command.dnsserver_del(hostname)
+            dns_server_id = bindinstance.dns_server_id_for_ipa_server(
+                self.api, hostname)
+            self.api.Command.dnsserver_del(dns_server_id)
         except errors.NotFound:
             pass
 

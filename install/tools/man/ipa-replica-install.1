@@ -72,7 +72,7 @@ The IP address of this server. In split-hostname mode this is specifically a Dir
 This option can be used multiple times to specify more IP addresses of the server (e.g. multihomed and/or dualstacked server).
 .TP
 \fB\-\-dns\-hostname\fR=\fIDNS_HOST_NAME\fR
-Network-facing FQDN of integrated DNS in split-hostname mode. This name is used for DNS A/AAAA, PTR, NS/SOA and BIND listener identity. The FreeIPA DNS backend and Kerberos service remain associated with the canonical IPA server hostname. This option requires \fB\-\-ipa-hostname\fR and \fB\-\-setup-dns\fR.
+Canonical FQDN of integrated DNS in split-hostname mode. This name is used for DNS A/AAAA, PTR, NS/SOA, BIND server identity, the LDAP DNS server configuration object and the DNS Kerberos principal/keytab. The DNS role remains owned by the IPA topology server identified by --ipa-hostname. This option requires \fB\-\-ipa-hostname\fR and \fB\-\-setup-dns\fR.
 .TP
 \fB\-\-dns\-ip\-address\fR=\fIIP_ADDRESS\fR
 Address on which integrated DNS is exposed in split-hostname mode. Specify this option exactly twice: once with IPv4 and once with IPv6. Both addresses must already be configured on local interfaces. The DNS IPv4 and IPv6 networks must be different from the corresponding Directory Controller networks. DNS over TLS with a separate DNS hostname is not supported yet.

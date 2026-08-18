@@ -50,7 +50,8 @@ class update_service_principalalias(Updater):
             # during update
             try:
                 (entries, truncated) = ldap.find_entries(search_filter,
-                    ['objectclass', 'krbprincipalname'], base_dn,
+                    ['objectclass', 'krbprincipalname', 'krbcanonicalname'],
+                    base_dn,
                     time_limit=0, size_limit=0)
             except errors.NotFound:
                 logger.debug("update_service_principalalias: no service "
@@ -73,7 +74,10 @@ class update_service_principalalias(Updater):
             for entry in entries:
                 entry['objectclass'] = (entry['objectclass'] +
                                         ['ipakrbprincipal'])
-                entry['ipakrbprincipalalias'] = entry['krbprincipalname']
+                canonical = entry.single_value.get('krbcanonicalname')
+                if canonical is None:
+                    canonical = entry['krbprincipalname'][0]
+                entry['ipakrbprincipalalias'] = [canonical]
                 try:
                     ldap.update_entry(entry)
                 except (errors.EmptyModlist, errors.NotFound):

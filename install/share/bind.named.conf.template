@@ -60,7 +60,7 @@ include "$NAMED_CUSTOM_CONF";
 dyndb "ipa" "$BIND_LDAP_SO" {
 	uri "ldapi://%2fvar%2frun%2fslapd-$SERVER_ID.socket";
 	base "cn=dns,$SUFFIX";
-	server_id "$FQDN";
+	server_id "$DNS_SERVER_ID";
 	auth_method "sasl";
 	sasl_mech "EXTERNAL";
 	krb5_keytab "FILE:$NAMED_KEYTAB";
