@@ -85,7 +85,7 @@ BIPTEC RPM строится не из upstream `freeipa.spec.in`, а повер�
 
 ```text
 FreeIPA 4.13.2 + Fedora release 1 + BIPTEC release 1
-=> 4.13.2-1.biptec.1.fc44
+=> 4.13.2-1.fc44.biptec.1
 ```
 
 Сборка локально на Fedora 44 выполняется тем же script, что и CI:
@@ -103,7 +103,7 @@ Build script сам загружает Fedora source archive из dist-git looka
 Production host не должен компилировать FreeIPA. Основной release asset — архив вида:
 
 ```text
-biptec-freeipa-4.13.2-1.biptec.1.fc44-x86_64-repo.tar.gz
+biptec-freeipa-4.13.2-1.fc44.biptec.1-x86_64-repo.tar.gz
 ```
 
 После распаковки каталог `repo/` является обычным DNF repository с RPM и `repodata/`.

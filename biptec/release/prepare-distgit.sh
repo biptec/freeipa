@@ -27,7 +27,7 @@ fedora_release, biptec_release = sys.argv[2:4]
 patches = sys.argv[4:]
 text = spec.read_text()
 release_re = re.compile(r'^Release:\s+.*$', re.M)
-replacement = f'Release:        {fedora_release}.biptec.{biptec_release}%{{?rc_version:.%rc_version}}%{{?dist}}'
+replacement = f'Release:        {fedora_release}%{{?rc_version:.%rc_version}}%{{?dist}}.biptec.{biptec_release}'
 text, n = release_re.subn(replacement, text, count=1)
 if n != 1:
     raise SystemExit('could not replace Release line')
@@ -47,5 +47,5 @@ spec.write_text(text)
 PY
 
 echo "Prepared Fedora dist-git at $FEDORA_DISTGIT_COMMIT"
-echo "RPM release: $FEDORA_PACKAGE_RELEASE.biptec.$BIPTEC_RELEASE"
+echo "RPM release: $FEDORA_PACKAGE_RELEASE%dist.biptec.$BIPTEC_RELEASE"
 grep -E '^Version:|^Release:|^Patch900[0-9]:' "$SPEC"
