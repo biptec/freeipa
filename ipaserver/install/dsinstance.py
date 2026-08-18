@@ -23,6 +23,7 @@ from __future__ import print_function, absolute_import
 import logging
 import shutil
 import os
+import shlex
 import tempfile
 import fnmatch
 
@@ -225,11 +226,109 @@ class DsInstance(service.Service):
 
     subject_base = ipautil.dn_attribute_property('_subject_base')
 
+    def _split_network_bootstrap_paths(self):
+        helper = os.path.join(
+            paths.LIBEXEC_IPA_DIR,
+            'ipa-split-network-ready-{0}'.format(self.serverid))
+        dropin_dir = os.path.join(
+            paths.ETC_SYSTEMD_SYSTEM_DIR,
+            'dirsrv@{0}.service.d'.format(self.serverid))
+        return helper, os.path.join(dropin_dir, 'ipa-split-network.conf')
+
+    def configure_split_network_bootstrap(self):
+        """Make split Directory Service startup independent of DNS.
+
+        389-DS accepts one nsslapd-listenhost value.  Split mode therefore
+        uses the IPA service FQDN so both IPv4 and IPv6 can be selected, but
+        that FQDN must resolve before integrated DNS is available.  A small
+        systemd pre-start helper restores deterministic local host mappings
+        and waits for both Directory addresses to exist on local interfaces.
+        """
+        ipv4 = getattr(api.env, 'ipa_ipv4_address', None)
+        ipv6 = getattr(api.env, 'ipa_ipv6_address', None)
+        if not (ipv4 and ipv6):
+            return
+
+        records = [(str(ipv4), self.fqdn), (str(ipv6), self.fqdn)]
+        dns_hostname = getattr(api.env, 'dns_hostname', None)
+        if dns_hostname:
+            for key in ('dns_ipv4_address', 'dns_ipv6_address'):
+                address = getattr(api.env, key, None)
+                if address:
+                    records.append((str(address), dns_hostname))
+
+        helper_path, dropin_path = self._split_network_bootstrap_paths()
+        lines = [
+            '#!/bin/sh',
+            'set -eu',
+            'PATH=/usr/sbin:/usr/bin:/sbin:/bin',
+            'export PATH',
+            'hosts=/etc/hosts',
+            '',
+            'ensure_host() {',
+            '    address=$1',
+            '    hostname=$2',
+            '    shortname=$3',
+            '    if ! grep -F "$address" "$hosts" | '
+            'grep -Fq "$hostname"; then',
+            '        printf "%s\t%s %s\n" "$address" "$hostname" '
+            '"$shortname" >> "$hosts"',
+            '    fi',
+            '}',
+            '',
+            'wait_address() {',
+            '    address=$1',
+            '    attempt=0',
+            '    while [ "$attempt" -lt 60 ]; do',
+            '        if ip -o addr show | grep -Fq "$address/"; then',
+            '            return 0',
+            '        fi',
+            '        attempt=$((attempt + 1))',
+            '        sleep 1',
+            '    done',
+            '    echo "Directory address $address is not configured" >&2',
+            '    return 1',
+            '}',
+            '',
+        ]
+        for address, hostname in records:
+            shortname = hostname.split('.', 1)[0]
+            lines.append('ensure_host {0} {1} {2}'.format(
+                shlex.quote(address), shlex.quote(hostname),
+                shlex.quote(shortname)))
+        lines.extend((
+            '',
+            'wait_address {0}'.format(shlex.quote(str(ipv4))),
+            'wait_address {0}'.format(shlex.quote(str(ipv6))),
+            '',
+        ))
+
+        os.makedirs(os.path.dirname(helper_path), exist_ok=True)
+        with open(helper_path, 'w') as f:
+            f.write('\n'.join(lines))
+        os.chmod(helper_path, 0o755)
+        tasks.restore_context(helper_path)
+
+        os.makedirs(os.path.dirname(dropin_path), exist_ok=True)
+        with open(dropin_path, 'w') as f:
+            f.write('[Unit]\n')
+            f.write('Wants=network-online.target\n')
+            f.write('After=network-online.target\n\n')
+            f.write('[Service]\n')
+            f.write('TimeoutStartSec=180\n')
+            f.write('ReadWritePaths=/etc/hosts\n')
+            f.write('ExecStartPre={0}\n'.format(helper_path))
+        os.chmod(dropin_path, 0o644)
+        tasks.restore_context(dropin_path)
+        tasks.systemd_daemon_reload()
+
     def configure_split_hostname_listeners(self):
         """Restrict LDAP/LDAPS TCP listeners to the IPA service hostname."""
         if not (getattr(api.env, 'ipa_ipv4_address', None) and
                 getattr(api.env, 'ipa_ipv6_address', None)):
             return
+
+        self.configure_split_network_bootstrap()
 
         if not api.Backend.ldap2.isconnected():
             api.Backend.ldap2.connect()
@@ -1146,6 +1245,10 @@ class DsInstance(service.Service):
             destfile = paths.SLAPD_INSTANCE_SYSTEMD_IPA_ENV_TEMPLATE % (
                 serverid
             )
+            helper_path = os.path.join(
+                paths.LIBEXEC_IPA_DIR,
+                'ipa-split-network-ready-{0}'.format(serverid))
+            ipautil.remove_file(helper_path)
             ipautil.remove_file(destfile)
             ipautil.remove_directory(os.path.dirname(destfile))
 

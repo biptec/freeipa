@@ -1567,7 +1567,12 @@ class ReplicationManager:
 
         # delete DNS server configuration, if any
         try:
-            api.Command.dnsserver_del(unicode(replica))
+            # Local import avoids service -> ldapupdate -> replication ->
+            # bindinstance -> service during plugin bootstrap.
+            from ipaserver.install import bindinstance
+            dns_server_id = bindinstance.dns_server_id_for_ipa_server(
+                api, unicode(replica))
+            api.Command.dnsserver_del(dns_server_id)
         except errors.NotFound:
             pass
         except Exception as e:

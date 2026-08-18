@@ -39,14 +39,14 @@ Create home directories for users on their first login.
 The fully\-qualified DNS name of this machine. Normally it is also the canonical IPA server name. When \fB\-\-ipa-hostname\fR is used, this name remains the machine identity after installation.
 .TP
 \fB\-\-ipa\-hostname\fR=\fIIPA_HOST_NAME\fR
-Use a distinct canonical FQDN for IPA server services while preserving \fB\-\-hostname\fR as the machine identity. IPA server discovery, service principals, certificates, DNS server records and topology remain anchored on IPA_HOST_NAME. This option is intended for deployments that deliberately separate machine and service identities.
+Use a distinct canonical FQDN for IPA server services while preserving \fB\-\-hostname\fR as the machine identity. IPA server discovery, Directory/HTTP service principals, certificates and topology remain anchored on IPA_HOST_NAME. Integrated DNS may use a separate canonical identity with --dns-hostname. This option is intended for deployments that deliberately separate machine and service identities.
 .TP
 \fB\-\-ip\-address\fR=\fIIP_ADDRESS\fR, \fB\-\-directory\-ip\-address\fR=\fIIP_ADDRESS\fR
 The IP address of this server. In split-hostname mode this is specifically a Directory Controller / IPA service address. Exactly one IPv4 and one IPv6 address are required and both must already be configured on local interfaces. The two option names are aliases. If this address does not match the address the host resolves to and \-\-setup\-dns is not selected, the installation will fail. If the server hostname is not resolvable, a record for the hostname and IP_ADDRESS is added to /etc/hosts.
 This option can be used multiple times to specify more IP addresses of the server (e.g. multihomed and/or dualstacked server).
 .TP
 \fB\-\-dns\-hostname\fR=\fIDNS_HOST_NAME\fR
-Network-facing FQDN of integrated DNS in split-hostname mode. This name is used for DNS A/AAAA, PTR, NS/SOA and BIND listener identity. The FreeIPA DNS backend and Kerberos service remain associated with the canonical IPA server hostname. This option requires \fB\-\-ipa-hostname\fR and \fB\-\-setup-dns\fR.
+Canonical FQDN of integrated DNS in split-hostname mode. This name is used for DNS A/AAAA, PTR, NS/SOA, BIND server identity, the LDAP DNS server configuration object and the DNS Kerberos principal/keytab. The DNS role remains owned by the IPA topology server identified by --ipa-hostname. This option requires \fB\-\-ipa-hostname\fR and \fB\-\-setup-dns\fR.
 .TP
 \fB\-\-dns\-ip\-address\fR=\fIIP_ADDRESS\fR
 Address on which integrated DNS is exposed in split-hostname mode. Specify this option exactly twice: once with IPv4 and once with IPv6. Both addresses must already be configured on local interfaces. The DNS IPv4 and IPv6 networks must be different from the corresponding Directory Controller networks. DNS over TLS with a separate DNS hostname is not supported yet.

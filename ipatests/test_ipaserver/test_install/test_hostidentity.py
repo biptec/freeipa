@@ -284,3 +284,35 @@ def test_verify_machine_identity_accepts_typed_principals():
     with patch.object(hostidentity, '_host_dn', return_value='host-dn'):
         hostidentity.verify_machine_identity(
             IPA_HOST, SYSTEM_HOST, REALM, api_instance=api_instance)
+
+
+def test_service_alias_metadata_keeps_single_canonical_alias():
+    canonical = f'HTTP/{IPA_HOST}@{REALM}'
+    alias = f'HTTP/{SYSTEM_HOST}@{REALM}'
+    entry = MagicMock()
+    values = {
+        'krbprincipalname': [canonical],
+        'objectclass': ['top', 'ipaservice'],
+    }
+    entry.get.side_effect = lambda key, default=(): values.get(key, default)
+    entry.single_value.get.side_effect = lambda key: {
+        'krbcanonicalname': canonical,
+        'ipakrbprincipalalias': None,
+    }.get(key)
+
+    ldap = MagicMock()
+    ldap.find_entries.return_value = ([entry], False)
+    api_instance = MagicMock()
+
+    with patch.object(hostidentity, 'SERVICE_PRINCIPAL_PREFIXES', ('HTTP',)), \
+            patch.object(hostidentity, 'DN', return_value='service-base'):
+        hostidentity._add_service_principal_aliases(
+            ldap, IPA_HOST, SYSTEM_HOST, REALM, api_instance)
+
+    entry.__setitem__.assert_any_call(
+        'krbprincipalname', [canonical, alias])
+    entry.__setitem__.assert_any_call(
+        'objectclass', ['top', 'ipaservice', 'ipakrbprincipal'])
+    entry.__setitem__.assert_any_call(
+        'ipakrbprincipalalias', [canonical])
+    ldap.update_entry.assert_called_once_with(entry)

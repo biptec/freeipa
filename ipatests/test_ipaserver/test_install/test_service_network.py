@@ -1,10 +1,13 @@
 #
 # Copyright (C) 2026  FreeIPA Contributors.  See COPYING for license
 #
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+from ipalib import errors
+from ipapython.dn import DN
 
 from ipaserver.install import (
-    bindinstance, dsinstance, hostidentity, httpinstance,
+    bindinstance, dsinstance, hostidentity, httpinstance, service,
 )
 
 
@@ -125,3 +128,118 @@ def test_httpd_normal_mode_does_not_add_server_name():
             httpinstance.HTTPInstance._split_httpd_server_name_directive(
                 'ipa.example.test'))
     assert directive == ''
+
+
+def test_bind_split_endpoint_uses_dns_runtime_identity():
+    bind = object.__new__(bindinstance.BindInstance)
+    bind.fqdn = 'ipa.example.test'
+    bind.dns_hostname = 'dns.example.test'
+    bind.realm = 'EXAMPLE.TEST'
+    bind.service_prefix = 'DNS'
+    assert bind.principal == 'DNS/dns.example.test@EXAMPLE.TEST'
+
+
+def test_bind_normal_mode_keeps_ipa_runtime_identity():
+    bind = object.__new__(bindinstance.BindInstance)
+    bind.fqdn = 'ipa.example.test'
+    bind.dns_hostname = None
+    bind.realm = 'EXAMPLE.TEST'
+    bind.service_prefix = 'DNS'
+    assert bind.principal == 'DNS/ipa.example.test@EXAMPLE.TEST'
+
+
+def test_bind_split_endpoint_sets_dns_server_id():
+    bind = object.__new__(bindinstance.BindInstance)
+    bind.fqdn = 'ipa.example.test'
+    bind.dns_hostname = 'dns.example.test'
+    bind.ip_addresses = [
+        FakeAddress('10.0.0.10', 4),
+        FakeAddress('2001:db8:1::10', 6),
+    ]
+    bind.dns_ip_addresses = [
+        FakeAddress('10.0.1.53', 4),
+        FakeAddress('2001:db8:2::53', 6),
+    ]
+    bind.dns_over_tls = False
+    bind.dns_policy = None
+    bind.dns_over_tls_key = None
+    bind.dns_over_tls_cert = None
+
+    with patch.object(bindinstance.paths, 'NAMED_CRYPTO_POLICY_FILE', None), \
+            patch.object(bind, '_get_dnssec_validation', return_value='yes'):
+        bind._setup_sub_dict()
+
+    assert bind.sub_dict['FQDN'] == 'ipa.example.test'
+    assert bind.sub_dict['DNS_SERVER_ID'] == 'dns.example.test'
+
+
+def test_local_dns_server_mapping_uses_persisted_dns_hostname():
+    with patch.object(bindinstance, 'api') as api_mock:
+        api_mock.env.host = 'ipa.example.test'
+        api_mock.env.dns_hostname = 'dns.example.test'
+        result = bindinstance.dns_server_id_for_ipa_server(
+            api_mock, 'ipa.example.test')
+    assert result == 'dns.example.test'
+
+
+def test_service_owner_uses_finalized_machine_host_when_present():
+    svc = object.__new__(service.Service)
+    svc.fqdn = 'ipa.example.test'
+    svc.suffix = DN(('dc', 'example'), ('dc', 'test'))
+    svc.api = MagicMock()
+    svc.api.env.system_hostname = 'node.example.test'
+    svc.api.Backend.ldap2.get_entry.return_value = {}
+
+    owner = svc._managed_host_dn()
+    assert owner[0]['fqdn'] == 'node.example.test'
+
+
+def test_service_owner_uses_ipa_host_before_finalization():
+    svc = object.__new__(service.Service)
+    svc.fqdn = 'ipa.example.test'
+    svc.suffix = DN(('dc', 'example'), ('dc', 'test'))
+    svc.api = MagicMock()
+    svc.api.env.system_hostname = 'node.example.test'
+    svc.api.Backend.ldap2.get_entry.side_effect = errors.NotFound(reason='missing')
+
+    owner = svc._managed_host_dn()
+    assert owner[0]['fqdn'] == 'ipa.example.test'
+
+
+def test_ds_split_bootstrap_generates_prestart_helper(tmp_path):
+    ds = object.__new__(dsinstance.DsInstance)
+    ds.serverid = 'EXAMPLE-TEST'
+    ds.fqdn = 'ipa.example.test'
+    libexec = tmp_path / 'libexec'
+    systemd = tmp_path / 'systemd'
+
+    with patch.object(dsinstance, 'api') as api_mock, \
+            patch.object(dsinstance, 'tasks') as tasks_mock, \
+            patch.object(dsinstance.paths, 'LIBEXEC_IPA_DIR', str(libexec)), \
+            patch.object(
+                dsinstance.paths, 'ETC_SYSTEMD_SYSTEM_DIR', str(systemd)):
+        api_mock.env.ipa_ipv4_address = '10.0.0.10'
+        api_mock.env.ipa_ipv6_address = '2001:db8:1::10'
+        api_mock.env.dns_hostname = 'dns.example.test'
+        api_mock.env.dns_ipv4_address = '10.0.1.53'
+        api_mock.env.dns_ipv6_address = '2001:db8:2::53'
+
+        ds.configure_split_network_bootstrap()
+
+    helper = libexec / 'ipa-split-network-ready-EXAMPLE-TEST'
+    dropin = (
+        systemd / 'dirsrv@EXAMPLE-TEST.service.d' /
+        'ipa-split-network.conf')
+    helper_text = helper.read_text()
+    dropin_text = dropin.read_text()
+
+    assert 'ensure_host 10.0.0.10 ipa.example.test ipa' in helper_text
+    assert 'ensure_host 2001:db8:1::10 ipa.example.test ipa' in helper_text
+    assert 'ensure_host 10.0.1.53 dns.example.test dns' in helper_text
+    assert 'wait_address 10.0.0.10' in helper_text
+    assert 'wait_address 2001:db8:1::10' in helper_text
+    assert 'ReadWritePaths=/etc/hosts' in dropin_text
+    assert 'TimeoutStartSec=180' in dropin_text
+    assert 'ExecStartPre={0}'.format(helper) in dropin_text
+    assert helper.stat().st_mode & 0o111
+    tasks_mock.systemd_daemon_reload.assert_called_once_with()

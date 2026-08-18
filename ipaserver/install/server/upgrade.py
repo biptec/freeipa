@@ -1684,6 +1684,12 @@ def upgrade_configuration():
     # Ok, we are an IPA server, do the additional tests
     ds = dsinstance.DsInstance(realm_name=api.env.realm)
 
+    # Split Directory Service must be able to start before integrated DNS or
+    # any external resolver is available.  Recreate its pre-start bootstrap
+    # helper on upgrades before attempting to start DS.
+    if getattr(api.env, 'ipa_ipv4_address', None):
+        ds.configure_split_network_bootstrap()
+
     # start DS, CA will not start without running DS, and cause error
     ds_running = ds.is_running()
     if not ds_running:

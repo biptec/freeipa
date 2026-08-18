@@ -162,8 +162,10 @@ def _setup_dns_over_tls(options):
         sr.stop()
         sr.disable()
 
+    dns_server_id = bindinstance.dns_server_id_for_ipa_server(
+        api, api.env.host)
     api.Command.dnsserver_mod(
-        api.env.host,
+        dns_server_id,
         idnsforwarders="127.0.0.55",
         idnsforwardpolicy="first"
     )
