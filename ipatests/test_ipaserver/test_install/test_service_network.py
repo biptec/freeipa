@@ -1,7 +1,7 @@
 #
 # Copyright (C) 2026  FreeIPA Contributors.  See COPYING for license
 #
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from ipalib import errors
 from ipapython.dn import DN
@@ -243,3 +243,60 @@ def test_ds_split_bootstrap_generates_prestart_helper(tmp_path):
     assert 'ExecStartPre={0}'.format(helper) in dropin_text
     assert helper.stat().st_mode & 0o111
     tasks_mock.systemd_daemon_reload.assert_called_once_with()
+
+
+def test_late_split_service_creation_skips_missing_ipa_host():
+    svc = object.__new__(service.Service)
+    svc.fqdn = 'ipa.example.test'
+    svc.realm = 'EXAMPLE.TEST'
+    svc.service_prefix = 'cifs'
+    svc.suffix = DN(('dc', 'example'), ('dc', 'test'))
+    svc.api = MagicMock()
+    svc.api.env.system_hostname = 'node.example.test'
+    owner_dn = DN(
+        ('fqdn', 'node.example.test'),
+        ('cn', 'computers'), ('cn', 'accounts'), svc.suffix,
+    )
+
+    with patch.object(svc, '_managed_host_dn', return_value=owner_dn), \
+            patch.object(svc, '_ensure_split_service_metadata') as metadata:
+        svc._add_service_principal()
+
+    svc.api.Command.service_add.assert_called_once_with(
+        'cifs/ipa.example.test@EXAMPLE.TEST',
+        force=True,
+        skip_host_check=True,
+    )
+    metadata.assert_called_once_with(
+        'cifs/node.example.test@EXAMPLE.TEST', owner_dn)
+
+
+def test_split_service_keytab_retrieves_machine_alias_without_rekey():
+    svc = object.__new__(service.Service)
+    svc.fqdn = 'ipa.example.test'
+    svc.realm = 'EXAMPLE.TEST'
+    svc.service_prefix = 'cifs'
+    svc.keytab = '/etc/samba/samba.keytab'
+    svc.api = MagicMock()
+    svc.api.env.ldap_uri = 'ldapi://example'
+
+    with patch.object(svc, '_add_service_principal') as add, \
+            patch.object(svc, 'clean_previous_keytab') as clean, \
+            patch.object(svc, 'run_getkeytab') as getkeytab, \
+            patch.object(svc, 'set_keytab_owner') as owner, \
+            patch.object(
+                svc, '_split_service_principal_alias',
+                return_value='cifs/node.example.test@EXAMPLE.TEST'):
+        svc.request_service_keytab()
+
+    add.assert_called_once_with()
+    clean.assert_called_once_with()
+    assert getkeytab.call_args_list == [
+        call(
+            'ldapi://example', '/etc/samba/samba.keytab',
+            'cifs/ipa.example.test@EXAMPLE.TEST'),
+        call(
+            'ldapi://example', '/etc/samba/samba.keytab',
+            'cifs/node.example.test@EXAMPLE.TEST', retrieve=True),
+    ]
+    owner.assert_called_once_with()
