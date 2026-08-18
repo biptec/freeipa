@@ -353,3 +353,31 @@ def test_bare_ram_ok(mock_psutil, mock_in_container):
     mock_psutil.return_value = fake_memory
 
     installutils.check_available_memory(True)
+
+
+@pytest.mark.parametrize(
+    'system_line, expected_system',
+    [
+        ('system_hostname = node.example.test\n', 'node.example.test'),
+        ('', 'ipa.example.test'),
+    ],
+)
+def test_restore_header_machine_hostname_compatibility(
+        tempdir, system_line, expected_system):
+    header = os.path.join(tempdir, 'header')
+    with open(header, 'w') as f:
+        f.write('[ipa]\n')
+        f.write('type = FULL\n')
+        f.write('time = 2026-08-17T00:00:00Z\n')
+        f.write('host = ipa.example.test\n')
+        f.write(system_line)
+        f.write('ipa_version = 4.13.2\n')
+        f.write('version = 1\n')
+        f.write('services = HTTP,LDAP\n')
+
+    restore = object.__new__(ipa_restore.Restore)
+    restore.header = header
+    restore.read_header()
+
+    assert restore.backup_host == 'ipa.example.test'
+    assert restore.backup_system_hostname == expected_system

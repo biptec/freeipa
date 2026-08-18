@@ -21,6 +21,7 @@
 from __future__ import print_function
 
 import logging
+import configparser
 
 from ipapython import ipachangeconf
 from ipapython.config import (IPAOptionParser, OptionGroup,
@@ -56,6 +57,18 @@ RESPONDER = None
 QUIET = False
 CCACHE_FILE = None
 KRB5_CONFIG = None
+
+
+def configured_hostname():
+    """Return IPA-configured host identity, falling back to OS FQDN."""
+    parser = configparser.RawConfigParser()
+    try:
+        parser.read(paths.IPA_DEFAULT_CONF)
+        if parser.has_option('global', 'host'):
+            return parser.get('global', 'host')
+    except (OSError, configparser.Error):
+        pass
+    return FQDN
 
 
 class SshExec:
@@ -173,9 +186,10 @@ def parse_options():
                         "(for servers installed before IPA 3.1)")
 
     common_group.add_option("", "--hostname", dest="hostname",
-                      help="The hostname of this server (FQDN). "
-                           "By default the result of getfqdn() call from "
-                           "Python's socket module is used.")
+                      help="The hostname of this IPA server (FQDN). "
+                           "Defaults to the host configured in "
+                           "/etc/ipa/default.conf, or the OS FQDN when "
+                           "IPA is not configured.")
     parser.add_option_group(common_group)
 
     parser.add_option("-d", "--debug", dest="debug",
@@ -207,7 +221,7 @@ def parse_options():
        parser.error("No action: you should select either --replica or --master option.")
 
     if not options.hostname:
-        options.hostname = FQDN
+        options.hostname = configured_hostname()
 
     return safe_options, options
 

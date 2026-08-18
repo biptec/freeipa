@@ -40,7 +40,7 @@ from ipalib.util import (
 from ipalib.facts import IPA_MODULES
 from ipaserver.install import (
     adtrust, adtrustinstance, bindinstance, ca, dns, dsinstance,
-    httpinstance, installutils, kra, krbinstance,
+    httpinstance, hostidentity, installutils, kra, krbinstance,
     otpdinstance, custodiainstance, replication, service,
     sysupgrade, cainstance)
 from ipaserver.install.installutils import (
@@ -523,12 +523,23 @@ def install_check(installer):
     # utilities just use the hostname as returned by getaddrinfo to set
     # up some of the standard entries
 
-    if options.host_name:
+    system_hostname = None
+    if options.ipa_hostname:
+        # In split-hostname mode --hostname describes the machine identity,
+        # while all stock FreeIPA bootstrap code continues to see only the
+        # canonical IPA service hostname. External-CA phase 2 restores the
+        # original machine identity from the encrypted installer cache.
+        system_hostname = (
+            getattr(options, '_split_system_hostname', None) or
+            options.host_name or FQDN
+        )
+        host_default = options.ipa_hostname
+    elif options.host_name:
         host_default = options.host_name
     else:
         host_default = FQDN
 
-    if installer.interactive and not options.host_name:
+    if installer.interactive and not options.host_name and not options.ipa_hostname:
         host_name = read_host_name(host_default)
     else:
         host_name = host_default
@@ -540,6 +551,19 @@ def install_check(installer):
 
     host_name = host_name.lower()
     logger.debug("will use host_name: %s\n", host_name)
+
+    if system_hostname is not None:
+        try:
+            # The machine identity is deliberately not required to be the
+            # current local hostname during bootstrap.  Validate its syntax
+            # without coupling it to service-address DNS resolution.
+            verify_fqdn(system_hostname, no_host_dns=True,
+                        local_hostname=False)
+        except BadHostError as e:
+            raise ScriptError(e)
+        system_hostname = system_hostname.lower()
+        logger.debug("will preserve system_hostname: %s\n",
+                     system_hostname)
 
     if not options.domain_name:
         domain_name = read_domain_name(host_name[host_name.find(".")+1:],
@@ -681,6 +705,8 @@ def install_check(installer):
         # make sure host name specified by user is used instead of default
         host=host_name,
     )
+    if system_hostname is not None:
+        cfg['system_hostname'] = system_hostname
     if options.key_type_size:
         cfg['key_type_size'] = options.key_type_size
     if setup_ca:
@@ -707,6 +733,9 @@ def install_check(installer):
         ipaconf.setOption('ldap_uri', ldapi_uri),
         ipaconf.setOption('mode', 'production')
     ]
+    if system_hostname is not None:
+        gopts.append(ipaconf.setOption(
+            'system_hostname', system_hostname))
 
     if setup_ca:
         gopts.extend([
@@ -772,7 +801,11 @@ def install_check(installer):
 
     print()
     print("The IPA Master Server will be configured with:")
-    print("Hostname:       %s" % host_name)
+    if system_hostname is None:
+        print("Hostname:       %s" % host_name)
+    else:
+        print("IPA hostname:   %s" % host_name)
+        print("System hostname:%s" % (' ' + system_hostname))
     print("IP address(es): %s" % ", ".join(str(ip) for ip in ip_addresses))
     print("Domain name:    %s" % domain_name)
     print("Realm name:     %s" % realm_name)
@@ -824,7 +857,9 @@ def install_check(installer):
     options.dm_password = dm_password
     options.master_password = master_password
     options.admin_password = admin_password
-    options._host_name_overridden = bool(options.host_name)
+    options._host_name_overridden = bool(
+        options.host_name or options.ipa_hostname)
+    options._system_hostname = system_hostname
     options.host_name = host_name
     options.ip_addresses = ip_addresses
 
@@ -875,7 +910,9 @@ def install(installer):
 
     # set hostname (transient and static) if user instructed us to do so
     if options._host_name_overridden:
-        tasks.backup_hostname(fstore, sstore)
+        if (options._system_hostname is None or
+                sstore.get_state('network', 'hostname') is None):
+            tasks.backup_hostname(fstore, sstore)
         tasks.set_hostname(host_name)
 
     if installer._update_hosts_file:
@@ -959,6 +996,9 @@ def install(installer):
             options.reverse_zones = dns.reverse_zones
             cache_vars = {n: options.__dict__[n] for o, n in installer.knobs()
                           if n in options.__dict__}
+            if options._system_hostname is not None:
+                cache_vars['_split_system_hostname'] = (
+                    options._system_hostname)
             write_cache(cache_vars)
 
         ca.install_step_0(False, None, options, custodia=custodia)
@@ -1074,6 +1114,15 @@ def install(installer):
         # enabled, create a dummy instance to dump DNS configuration.
         bind = bindinstance.BindInstance(fstore)
         bind.create_file_with_system_records()
+
+    if options._system_hostname is not None:
+        service.print_msg("Finalizing machine host identity")
+        hostidentity.finalize_machine_identity(
+            ipa_hostname=host_name,
+            system_hostname=options._system_hostname,
+            realm=realm_name,
+            fstore=fstore,
+        )
 
     # Everything installed properly, activate ipa service.
     sstore.delete_state('installation', 'complete')
