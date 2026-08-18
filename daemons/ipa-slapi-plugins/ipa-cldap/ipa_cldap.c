@@ -37,6 +37,8 @@
  * All rights reserved.
  * END COPYRIGHT BLOCK **/
 
+#include <netdb.h>
+
 #include "ipa_cldap.h"
 #include "util.h"
 
@@ -73,6 +75,7 @@ static int ipa_cldap_stop(Slapi_PBlock *pb)
 {
     struct ipa_cldap_ctx *ctx;
     void *retval;
+    size_t i;
     int ret;
 
     ret = slapi_pblock_get(pb, SLAPI_PLUGIN_PRIVATE, &ctx);
@@ -93,8 +96,75 @@ static int ipa_cldap_stop(Slapi_PBlock *pb)
         return -1;
     }
 
+    for (i = 0; i < ctx->num_sds; i++) {
+        close(ctx->sds[i]);
+    }
+    free(ctx->sds);
+    ctx->sds = NULL;
+    ctx->num_sds = 0;
+    slapi_ch_free_string(&ctx->server_name);
+
     LOG("Plugin shutdown completed.\n");
 
+    return 0;
+}
+
+static int ipa_cldap_bind_address(int family,
+                                  const struct sockaddr *addr,
+                                  socklen_t addrlen,
+                                  bool v6only,
+                                  int *sd_out)
+{
+    int sd;
+    int flags;
+    int val;
+    int ret;
+
+    sd = socket(family, SOCK_DGRAM, 0);
+    if (sd == -1) {
+        ret = errno;
+        LOG_FATAL("Failed to create CLDAP socket (%d, %s)\n",
+                  ret, strerror(ret));
+        return ret;
+    }
+
+    val = 1;
+    if (setsockopt(sd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val)) == -1) {
+        ret = errno;
+        LOG("Failed to make socket immediately reusable (%d, %s)\n",
+            ret, strerror(ret));
+    }
+
+    if (family == AF_INET6 && v6only) {
+        val = 1;
+        if (setsockopt(sd, IPPROTO_IPV6, IPV6_V6ONLY,
+                       &val, sizeof(val)) == -1) {
+            ret = errno;
+            LOG_FATAL("Failed to restrict IPv6 CLDAP socket (%d, %s)\n",
+                      ret, strerror(ret));
+            close(sd);
+            return ret;
+        }
+    }
+
+    if (bind(sd, addr, addrlen) == -1) {
+        ret = errno;
+        LOG_FATAL("Failed to bind CLDAP socket (%d, %s)\n",
+                  ret, strerror(ret));
+        close(sd);
+        return ret;
+    }
+
+    flags = fcntl(sd, F_GETFL);
+    if (flags == -1 || fcntl(sd, F_SETFL, flags | O_NONBLOCK) == -1) {
+        ret = errno;
+        LOG_FATAL("Failed to set CLDAP socket to non-blocking (%d, %s)\n",
+                  ret, strerror(ret));
+        close(sd);
+        return ret;
+    }
+
+    *sd_out = sd;
     return 0;
 }
 
@@ -102,17 +172,20 @@ static int ipa_cldap_init_service(Slapi_PBlock *pb,
                                   struct ipa_cldap_ctx **cldap_ctx)
 {
     struct ipa_cldap_ctx *ctx;
-    struct sockaddr_in6 addr;
+    struct sockaddr_in6 wildcard_addr;
+    struct addrinfo hints;
+    struct addrinfo *result = NULL;
+    struct addrinfo *rp;
     Slapi_Entry *e;
-    int flags;
-    int val;
+    char *listen_host = NULL;
+    size_t address_count = 0;
+    size_t i;
     int ret;
 
     ctx = calloc(1, sizeof(struct ipa_cldap_ctx));
     if (!ctx) {
         return ENOMEM;
     }
-    ctx->sd = -1;
 
     ret = slapi_pblock_get(pb, SLAPI_PLUGIN_IDENTITY, &ctx->plugin_id);
     if ((ret != 0) || (NULL == ctx->plugin_id)) {
@@ -137,9 +210,6 @@ static int ipa_cldap_init_service(Slapi_PBlock *pb,
         goto done;
     }
 
-    /* create a stop pipe so the main DS thread can interrupt the poll()
-     * of the worker thread at any time and cause the worker thread to
-     * immediately exit without waiting for timeouts or such */
     ret = pipe(ctx->stopfd);
     if (ret != 0) {
         LOG_FATAL("Failed to stop pipe\n");
@@ -147,47 +217,102 @@ static int ipa_cldap_init_service(Slapi_PBlock *pb,
         goto done;
     }
 
-    ctx->sd = socket(PF_INET6, SOCK_DGRAM, 0);
-    if (ctx->sd == -1) {
-        LOG_FATAL("Failed to create IPv6 socket: IPv6 support in kernel "
-                  "is required\n");
-        ret = EIO;
-        goto done;
-    }
-
-    val = 1;
-    ret = setsockopt(ctx->sd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val));
-    if (ret == -1) {
-        ret = errno;
-        LOG("Failed to make socket immediately reusable (%d, %s)\n",
-            ret, strerror(ret));
-    }
-
-    memset(&addr, 0, sizeof(addr));
-    addr.sin6_family = AF_INET6;
-    addr.sin6_port = htons(CLDAP_PORT);
-
-    ret = bind(ctx->sd, (struct sockaddr *)&addr, sizeof(addr));
-    if (ret == -1) {
-        ret = errno;
-        LOG_FATAL("Failed to bind socket (%d, %s)\n", ret, strerror(ret));
-        goto done;
-    }
-
-    flags = fcntl(ctx->sd, F_GETFL);
-    if ((flags & O_NONBLOCK) == 0) {
-        ret = fcntl(ctx->sd, F_SETFL, flags | O_NONBLOCK);
-        if (ret == -1) {
-            ret = errno;
-            LOG_FATAL("Failed to set socket to non-blocking\n");
+    listen_host = slapi_entry_attr_get_charptr(e, "nsslapd-listenhost");
+    if (!listen_host) {
+        ctx->sds = calloc(1, sizeof(int));
+        if (!ctx->sds) {
+            ret = ENOMEM;
             goto done;
         }
+
+        memset(&wildcard_addr, 0, sizeof(wildcard_addr));
+        wildcard_addr.sin6_family = AF_INET6;
+        wildcard_addr.sin6_port = htons(CLDAP_PORT);
+        wildcard_addr.sin6_addr = in6addr_any;
+
+        ret = ipa_cldap_bind_address(
+            AF_INET6,
+            (struct sockaddr *)&wildcard_addr,
+            sizeof(wildcard_addr),
+            false,
+            &ctx->sds[0]);
+        if (ret != 0) {
+            goto done;
+        }
+        ctx->num_sds = 1;
+    } else {
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_DGRAM;
+        hints.ai_flags = AI_NUMERICSERV;
+
+        ret = getaddrinfo(listen_host, "389", &hints, &result);
+        if (ret != 0) {
+            LOG_FATAL("Failed to resolve CLDAP listen host %s: %s\n",
+                      listen_host, gai_strerror(ret));
+            ret = EINVAL;
+            goto done;
+        }
+
+        for (rp = result; rp != NULL; rp = rp->ai_next) {
+            if (rp->ai_family == AF_INET || rp->ai_family == AF_INET6) {
+                address_count++;
+            }
+        }
+        if (address_count == 0) {
+            LOG_FATAL("CLDAP listen host %s has no IPv4 or IPv6 addresses\n",
+                      listen_host);
+            ret = EADDRNOTAVAIL;
+            goto done;
+        }
+
+        ctx->sds = calloc(address_count, sizeof(int));
+        if (!ctx->sds) {
+            ret = ENOMEM;
+            goto done;
+        }
+
+        for (rp = result; rp != NULL; rp = rp->ai_next) {
+            if (rp->ai_family != AF_INET && rp->ai_family != AF_INET6) {
+                continue;
+            }
+            ret = ipa_cldap_bind_address(
+                rp->ai_family,
+                rp->ai_addr,
+                rp->ai_addrlen,
+                true,
+                &ctx->sds[ctx->num_sds]);
+            if (ret != 0) {
+                goto done;
+            }
+            ctx->num_sds++;
+        }
+        ctx->server_name = listen_host;
+        listen_host = NULL;
     }
 
+    ret = 0;
+
 done:
+    if (result) {
+        freeaddrinfo(result);
+    }
+    if (listen_host) {
+        slapi_ch_free_string(&listen_host);
+    }
     if (ret) {
-        if (ctx->sd != -1) {
-            close(ctx->sd);
+        if (ctx->sds) {
+            for (i = 0; i < ctx->num_sds; i++) {
+                close(ctx->sds[i]);
+            }
+            free(ctx->sds);
+        }
+        slapi_ch_free_string(&ctx->server_name);
+        if (ctx->stopfd[0] > 0) {
+            close(ctx->stopfd[0]);
+        }
+        if (ctx->stopfd[1] > 0) {
+            close(ctx->stopfd[1]);
         }
         free(ctx);
     } else {

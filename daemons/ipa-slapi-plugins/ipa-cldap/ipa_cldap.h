@@ -47,6 +47,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <pthread.h>
 #include <dirsrv/slapi-plugin.h>
@@ -65,8 +66,10 @@ struct ipa_cldap_ctx {
     Slapi_ComponentId *plugin_id;
     pthread_t tid;
     char *base_dn;
+    char *server_name;
     int stopfd[2];
-    int sd;
+    int *sds;
+    size_t num_sds;
 };
 
 struct kvp {

@@ -7,7 +7,8 @@ from ipalib import errors
 from ipapython.dn import DN
 
 from ipaserver.install import (
-    bindinstance, dsinstance, hostidentity, httpinstance, service,
+    adtrustinstance, bindinstance, dsinstance, hostidentity, httpinstance,
+    service,
 )
 
 
@@ -300,3 +301,32 @@ def test_split_service_keytab_retrieves_machine_alias_without_rekey():
             'cifs/node.example.test@EXAMPLE.TEST', retrieve=True),
     ]
     owner.assert_called_once_with()
+
+
+def test_adtrust_split_cldap_uses_directory_hostname():
+    adtrust = object.__new__(adtrustinstance.ADTRUSTInstance)
+    adtrust.fqdn = 'ipa.example.test'
+    entry = MagicMock()
+    entry.single_value.get.return_value = None
+
+    with patch.object(adtrustinstance, 'api') as api_mock:
+        api_mock.env.ipa_ipv4_address = '10.0.0.10'
+        api_mock.env.ipa_ipv6_address = '2001:db8:1::10'
+        api_mock.Backend.ldap2.get_entry.return_value = entry
+        adtrust.configure_cldap_listener()
+
+    entry.__setitem__.assert_called_once_with(
+        'nsslapd-listenhost', ['ipa.example.test'])
+    api_mock.Backend.ldap2.update_entry.assert_called_once_with(entry)
+
+
+def test_adtrust_normal_cldap_keeps_upstream_listener():
+    adtrust = object.__new__(adtrustinstance.ADTRUSTInstance)
+    adtrust.fqdn = 'ipa.example.test'
+
+    with patch.object(adtrustinstance, 'api') as api_mock:
+        api_mock.env.ipa_ipv4_address = None
+        api_mock.env.ipa_ipv6_address = None
+        adtrust.configure_cldap_listener()
+
+    api_mock.Backend.ldap2.get_entry.assert_not_called()

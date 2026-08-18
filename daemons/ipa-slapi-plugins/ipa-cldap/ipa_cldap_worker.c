@@ -213,8 +213,7 @@ done:
     return ret;
 }
 
-static void ipa_cldap_respond(struct ipa_cldap_ctx *ctx,
-                              struct ipa_cldap_req *req,
+static void ipa_cldap_respond(struct ipa_cldap_req *req,
                               struct berval *nbtblob)
 {
     struct berval *bv = NULL;
@@ -251,7 +250,7 @@ static void ipa_cldap_respond(struct ipa_cldap_ctx *ctx,
         goto done;
     }
 
-    ret = sendto(ctx->sd, bv->bv_val, bv->bv_len, 0,
+    ret = sendto(req->fd, bv->bv_val, bv->bv_len, 0,
                  (struct sockaddr *)&req->ss, req->ss_len);
     if (ret == -1) {
         LOG("Failed to send CLDAP reply (%d, %s)\n", errno, strerror(errno));
@@ -284,7 +283,7 @@ done:
         memset(&reply, 0, sizeof(struct berval));
     }
 
-    ipa_cldap_respond(ctx, req, &reply);
+    ipa_cldap_respond(req, &reply);
 
     ipa_cldap_free_kvps(&req->kvps);
     free(reply.bv_val);
@@ -292,7 +291,7 @@ done:
     return;
 }
 
-static struct ipa_cldap_req *ipa_cldap_recv_dgram(struct ipa_cldap_ctx *ctx)
+static struct ipa_cldap_req *ipa_cldap_recv_dgram(int fd)
 {
     struct ipa_cldap_req *req;
 
@@ -302,7 +301,7 @@ static struct ipa_cldap_req *ipa_cldap_recv_dgram(struct ipa_cldap_ctx *ctx)
         return NULL;
     }
 
-    req->fd = ctx->sd;
+    req->fd = fd;
     req->ss_len = sizeof(struct sockaddr_storage);
 
     req->dgsize = recvfrom(req->fd, req->dgram, MAX_DG_SIZE, 0,
@@ -319,22 +318,31 @@ static struct ipa_cldap_req *ipa_cldap_recv_dgram(struct ipa_cldap_ctx *ctx)
 void *ipa_cldap_worker(void *arg)
 {
     struct ipa_cldap_req *req;
-    struct pollfd fds[2];
-    bool stop = false;
     struct ipa_cldap_ctx *ctx = (struct ipa_cldap_ctx *) arg;
+    struct pollfd *fds;
+    size_t nfds;
+    size_t i;
+    bool stop = false;
     int ret;
 
-    while (!stop) {
+    nfds = ctx->num_sds + 1;
+    fds = calloc(nfds, sizeof(struct pollfd));
+    if (!fds) {
+        LOG_FATAL("Failed to allocate poll descriptors\n");
+        return NULL;
+    }
 
+    while (!stop) {
         fds[0].fd = ctx->stopfd[0];
         fds[0].events = POLLIN;
         fds[0].revents = 0;
-        fds[1].fd = ctx->sd;
-        fds[1].events = POLLIN;
-        fds[1].revents = 0;
+        for (i = 0; i < ctx->num_sds; i++) {
+            fds[i + 1].fd = ctx->sds[i];
+            fds[i + 1].events = POLLIN;
+            fds[i + 1].revents = 0;
+        }
 
-        /* wait until a request comes in */
-        ret = poll(fds, 2, -1);
+        ret = poll(fds, nfds, -1);
         if (ret == -1) {
             if (errno != EINTR) {
                 LOG_FATAL("poll() failed with [%d, %s]. Can't continue.\n",
@@ -346,19 +354,21 @@ void *ipa_cldap_worker(void *arg)
             continue;
         }
 
-        /* got a stop signal, exit the loop */
         if (fds[0].revents & POLLIN) {
             stop = true;
             continue;
         }
 
-        /* got a CLDAP packet, handle it */
-        if (fds[1].revents & POLLIN) {
-            req = ipa_cldap_recv_dgram(ctx);
-            if (req) {
-                ipa_cldap_process(ctx, req);
+        for (i = 0; i < ctx->num_sds; i++) {
+            if (fds[i + 1].revents & POLLIN) {
+                req = ipa_cldap_recv_dgram(ctx->sds[i]);
+                if (req) {
+                    ipa_cldap_process(ctx, req);
+                }
             }
         }
     }
+
+    free(fds);
     return NULL;
 }
