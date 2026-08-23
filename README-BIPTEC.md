@@ -10,12 +10,11 @@ BIPTEC FreeIPA является постоянным downstream fork. Upstream c
 - `master` должен оставаться максимально близким к upstream.
 - `feat/*` хранит историю разработки и экспериментов.
 - `biptec/<version>` — поддерживаемая release-ветка, основанная на конкретном upstream release tag.
-- `biptec-<version>-<release>` — immutable production source tag.
+- `<version>-<release>` — immutable production source tag в нашем fork.
 - Production никогда не устанавливается из произвольного branch HEAD.
 
-Для 4.13.2 базой является upstream `release-4-13-2`.
-Проверенная 14-коммитная development history сохранена в `feat/ipa-service-hostname`,
-а release-ветка содержит пять логических source patches с эквивалентным итоговым tree.
+Для 4.13.3 базой является upstream `release-4-13-3`.
+Release-ветка содержит пять логических source patches, перенесённых с 4.13.2; `git range-diff` подтверждает их эквивалентность.
 
 ## 2. Что считается релизом
 
@@ -26,19 +25,19 @@ GitHub Release для production tag должен содержать готов�
 GitHub Actions workflow `.github/workflows/biptec-release.yml` запускается:
 
 - на каждом push в `biptec/**` — CI build без публикации GitHub Release;
-- при push production tag `biptec-*` — повторная сборка и публикация GitHub Release;
+- при push production tag, начинающегося с цифры (`<version>-<release>`), — повторная сборка и публикация GitHub Release;
 - вручную через `workflow_dispatch`, когда workflow доступен в default branch.
 
 Tag обязан совпадать с `BIPTEC-RELEASE`:
 
 ```text
-biptec-${PACKAGE_VERSION}-${BIPTEC_RELEASE}
+${PACKAGE_VERSION}-${BIPTEC_RELEASE}
 ```
 
 Например:
 
 ```text
-biptec-4.13.2-1
+4.13.3-1
 ```
 
 ## 3. Machine-readable release metadata
@@ -47,8 +46,8 @@ biptec-4.13.2-1
 номер BIPTEC release и границы source patch stack.
 
 Изменять source code после `PATCH_HEAD` нельзя. Если код изменился, он должен стать новым логическим
-patch commit, после чего необходимо обновить `PATCH_HEAD`, `PATCH_COUNT` и после полной lab-валидации
-`VALIDATED_TREE`.
+patch commit, после чего необходимо обновить `PATCH_HEAD`, `PATCH_COUNT` и после source-review зафиксировать
+`VALIDATED_TREE`. Production tag всё равно запрещён до полного lab acceptance.
 ## 4. Patch stack
 
 Patch files не редактируются вручную и не являются источником истины. Источник истины — Git commits
@@ -66,7 +65,7 @@ biptec/release/verify-source.sh
 biptec/release/export-patches.sh /tmp/biptec-patches
 ```
 
-Для текущей 4.13.2 должны получиться пять файлов с номерами `9001`–`9005`.
+Для текущей 4.13.3 должны получиться пять файлов с номерами `9001`–`9005`.
 High patch numbers выбраны намеренно: Fedora downstream patches применяются первыми, BIPTEC patches — после них.
 
 ## 5. Fedora packaging
@@ -84,8 +83,8 @@ BIPTEC RPM строится не из upstream `freeipa.spec.in`, а повер�
 Текущая схема версии RPM:
 
 ```text
-FreeIPA 4.13.2 + Fedora release 1 + BIPTEC release 1
-=> 4.13.2-1.fc44.biptec.1
+FreeIPA 4.13.3 + Fedora release 1.1 + BIPTEC release 1
+=> 4.13.3-1.1.fc44.biptec.1
 ```
 
 Сборка локально на Fedora 44 выполняется тем же script, что и CI:
@@ -103,7 +102,7 @@ Build script сам загружает Fedora source archive из dist-git looka
 Production host не должен компилировать FreeIPA. Основной release asset — архив вида:
 
 ```text
-freeipa-4.13.2-1.fc44.biptec.1-x86_64-repo.tar.gz
+freeipa-4.13.3-1.1.fc44.biptec.1-x86_64-repo.tar.gz
 ```
 
 После распаковки каталог `repo/` является обычным DNF repository с RPM и `repodata/`.
@@ -115,12 +114,12 @@ RPM/repository signing key, private material должен храниться в�
 release environment или отдельный signing stage.
 ## 7. Переход на новую upstream FreeIPA
 
-При выходе новой версии не merge-ить новый upstream в старую `biptec/4.13.2`.
+При выходе следующей версии не merge-ить новый upstream в текущую `biptec/4.13.3`.
 Создать новую ветку от нового чистого upstream release tag:
 
 ```bash
 git fetch upstream --tags
-git switch -c biptec/4.13.3 release-4-13-3^{}
+git switch -c biptec/4.13.4 release-4-13-4^{}
 ```
 
 Затем перенести пять логических BIPTEC commits через cherry-pick/rebase, разрешая конфликты отдельно
@@ -128,7 +127,7 @@ git switch -c biptec/4.13.3 release-4-13-3^{}
 сравнить старую и новую patch series и обнаружить случайные семантические изменения.
 
 После успешного переноса обновить `BIPTEC-RELEASE`: upstream commit/tag, Fedora branch/dist-git commit,
-package version, patch head/count и только после полного lab acceptance — `VALIDATED_TREE`.
+package version, patch head/count и после source-review — `VALIDATED_TREE`. Production tag создаётся только после полного lab acceptance.
 
 Не переносить patch, если новая upstream версия уже реализует эквивалентное поведение: вместо этого
 удалить или уменьшить соответствующий downstream commit и повторить весь acceptance suite.
@@ -196,10 +195,10 @@ NTP/chrony, NetworkManager VLAN configuration, firewall policy и общий hos
 После этого создаётся annotated tag и отправляется в origin:
 
 ```bash
-git tag -a biptec-4.13.2-1 -m 'BIPTEC FreeIPA 4.13.2 release 1'
-git push origin biptec-4.13.2-1
+git tag -a 4.13.3-1 -m 'BIPTEC FreeIPA 4.13.3 release 1'
+git push origin 4.13.3-1
 ```
 
 Tag запускает тот же build pipeline заново. GitHub Release создаётся только если эта tagged build
 успешно завершилась. Название GitHub Release должно в точности совпадать с именем tag (например,
-`biptec-4.13.2-1`). Не прикреплять вручную RPM из более раннего branch build к production release.
+`4.13.3-1`). Не прикреплять вручную RPM из более раннего branch build к production release.
