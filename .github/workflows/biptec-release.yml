@@ -34,6 +34,13 @@ jobs:
       - name: Trust checked-out repository in Fedora container
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
+      - name: Fetch pinned upstream release tag
+        shell: bash
+        run: |
+          source BIPTEC-RELEASE
+          git fetch --no-tags https://github.com/freeipa/freeipa.git \
+            "refs/tags/${UPSTREAM_TAG}:refs/tags/${UPSTREAM_TAG}"
+
       - name: Verify downstream source
         run: biptec/release/verify-source.sh
 
