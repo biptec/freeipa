@@ -5,7 +5,7 @@ on:
     branches:
       - 'biptec/**'
     tags:
-      - 'biptec-*'
+      - '[0-9]*'
   workflow_dispatch:
 
 permissions:
@@ -49,17 +49,17 @@ jobs:
           retention-days: 30
 
       - name: Validate release tag
-        if: startsWith(github.ref, 'refs/tags/biptec-')
+        if: startsWith(github.ref, 'refs/tags/')
         shell: bash
         run: |
           source BIPTEC-RELEASE
-          expected="biptec-${PACKAGE_VERSION}-${BIPTEC_RELEASE}"
+          expected="${PACKAGE_VERSION}-${BIPTEC_RELEASE}"
           test "$GITHUB_REF_NAME" = "$expected" || {
             echo "Expected release tag $expected, got $GITHUB_REF_NAME" >&2
             exit 1
           }
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/biptec-')
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
