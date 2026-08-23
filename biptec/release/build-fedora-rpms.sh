@@ -41,7 +41,7 @@ find "$RPMTOP/SRPMS" -type f -name '*.src.rpm' -exec cp -t "$OUT/srpm" {} +
 cp "$OUT/rpms"/*.rpm "$OUT/repo/"
 createrepo_c "$OUT/repo"
 
-VERSION_ID="${PACKAGE_VERSION}-${FEDORA_PACKAGE_RELEASE}.fc${TARGET_FEDORA}.biptec.${BIPTEC_RELEASE}"
+VERSION_ID="${PACKAGE_VERSION}-${FEDORA_PACKAGE_RELEASE}.${RELEASE_REVISION}.fc${TARGET_FEDORA}"
 REPO_TAR="freeipa-${VERSION_ID}-${TARGET_ARCH}-repo.tar.gz"
 PATCH_TAR="freeipa-${VERSION_ID}-patches.tar.gz"
 
@@ -56,7 +56,7 @@ upstream_commit=$UPSTREAM_COMMIT
 fedora_branch=$FEDORA_BRANCH
 fedora_distgit_commit=$FEDORA_DISTGIT_COMMIT
 package_version=$PACKAGE_VERSION
-package_release=$FEDORA_PACKAGE_RELEASE.fc$TARGET_FEDORA.biptec.$BIPTEC_RELEASE
+package_release=$FEDORA_PACKAGE_RELEASE.$RELEASE_REVISION.fc$TARGET_FEDORA
 patch_count=$PATCH_COUNT
 target_arch=$TARGET_ARCH
 EOF
