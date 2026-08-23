@@ -31,7 +31,7 @@ GitHub Actions workflow `.github/workflows/biptec-release.yml` запускае�
 Tag обязан совпадать с `BIPTEC-RELEASE`:
 
 ```text
-${PACKAGE_VERSION}-${BIPTEC_RELEASE}
+${PACKAGE_VERSION}-${RELEASE_REVISION}
 ```
 
 Например:
@@ -43,7 +43,7 @@ ${PACKAGE_VERSION}-${BIPTEC_RELEASE}
 ## 3. Machine-readable release metadata
 
 `BIPTEC-RELEASE` фиксирует upstream tag/commit, Fedora dist-git commit, target Fedora,
-номер BIPTEC release и границы source patch stack.
+номер release revision и границы source patch stack.
 
 Изменять source code после `PATCH_HEAD` нельзя. Если код изменился, он должен стать новым логическим
 patch commit, после чего необходимо обновить `PATCH_HEAD`, `PATCH_COUNT` и после source-review зафиксировать
@@ -78,13 +78,13 @@ BIPTEC RPM строится не из upstream `freeipa.spec.in`, а повер�
 
 1. проверяет точный Fedora dist-git commit;
 2. добавляет экспортированные BIPTEC patches;
-3. меняет только RPM `Release` на `N%{?dist}.biptec.M`;
+3. меняет только RPM `Release` на `N.M%{?dist}`;
 4. оставляет upstream signed source tarball и Fedora spec semantics.
 Текущая схема версии RPM:
 
 ```text
-FreeIPA 4.13.3 + Fedora release 1.1 + BIPTEC release 1
-=> 4.13.3-1.1.fc44.biptec.1
+FreeIPA 4.13.3 + Fedora release 1.1 + release revision 1
+=> 4.13.3-1.1.1.fc44
 ```
 
 Сборка локально на Fedora 44 выполняется тем же script, что и CI:
@@ -102,7 +102,7 @@ Build script сам загружает Fedora source archive из dist-git looka
 Production host не должен компилировать FreeIPA. Основной release asset — архив вида:
 
 ```text
-freeipa-4.13.3-1.1.fc44.biptec.1-x86_64-repo.tar.gz
+freeipa-4.13.3-1.1.1.fc44-x86_64-repo.tar.gz
 ```
 
 После распаковки каталог `repo/` является обычным DNF repository с RPM и `repodata/`.
@@ -190,7 +190,7 @@ NTP/chrony, NetworkManager VLAN configuration, firewall policy и общий hos
 - AD Trust и endpoint tests зелёные;
 - failed promotion rollback зелёный;
 - binary repository bundle проверен установкой в clean Fedora VM;
-- `BIPTEC-RELEASE` содержит финальный release number.
+- `BIPTEC-RELEASE` содержит финальный `RELEASE_REVISION`.
 
 После этого создаётся annotated tag и отправляется в origin:
 

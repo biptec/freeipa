@@ -60,7 +60,7 @@ jobs:
         shell: bash
         run: |
           source BIPTEC-RELEASE
-          expected="${PACKAGE_VERSION}-${BIPTEC_RELEASE}"
+          expected="${PACKAGE_VERSION}-${RELEASE_REVISION}"
           test "$GITHUB_REF_NAME" = "$expected" || {
             echo "Expected release tag $expected, got $GITHUB_REF_NAME" >&2
             exit 1
