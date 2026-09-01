@@ -299,6 +299,16 @@ def dns_zone_exists(name, api=api):
         return True
 
 
+def find_forward_zone(fqdn, api=api):
+    """Return the most-specific IPA-managed zone and relative owner name."""
+    labels = normalize_zone(fqdn).rstrip('.').split('.')
+    for index in range(1, len(labels)):
+        zone = normalize_zone('.'.join(labels[index:]))
+        if dns_zone_exists(zone, api):
+            return zone, '.'.join(labels[:index])
+    return None, None
+
+
 def get_reverse_record_name(zone, ip_address):
     ip = netaddr.IPAddress(ip_address)
     rev = '.' + normalize_zone(zone)
@@ -1103,17 +1113,16 @@ class BindInstance(service.Service):
                      skip_overlap_check=True, api=self.api)
 
     def __add_master_records(self, fqdn, addrs):
-        host, zone = fqdn.split(".", 1)
+        zone, host = find_forward_zone(fqdn, api=self.api)
 
         # Add forward and reverse records to self
         for addr in addrs:
-            # Check first if the zone is a master zone
-            # (if it is a forward zone, dns_zone_exists will return False)
-            if dns_zone_exists(zone, api=self.api):
+            if zone is not None:
                 add_fwd_rr(zone, host, addr, self.api)
             else:
-                logger.debug("Skip adding record %s to a zone %s "
-                             "not managed by IPA", addr, zone)
+                logger.debug(
+                    "Skip adding forward record %s for %s: no IPA-managed "
+                    "ancestor zone", addr, fqdn)
 
             reverse_zone = find_reverse_zone(addr, self.api)
             if reverse_zone:

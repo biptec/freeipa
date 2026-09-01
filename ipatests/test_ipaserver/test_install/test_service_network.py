@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, call, patch
 from ipalib import errors
 from ipapython.dn import DN
 
+from ipaserver import dns_data_management
 from ipaserver.install import (
     adtrustinstance, bindinstance, dsinstance, hostidentity, httpinstance,
     service,
@@ -130,6 +131,59 @@ def test_httpd_normal_mode_does_not_add_server_name():
             httpinstance.HTTPInstance._split_httpd_server_name_directive(
                 'ipa.example.test'))
     assert directive == ''
+
+
+def test_find_forward_zone_supports_nested_service_hostname():
+    api_mock = MagicMock()
+
+    def zone_exists(zone, api=None):
+        return zone == 'example.test.'
+
+    with patch.object(bindinstance, 'dns_zone_exists', side_effect=zone_exists):
+        zone, owner = bindinstance.find_forward_zone(
+            'dns.svc.example.test', api=api_mock)
+
+    assert zone == 'example.test.'
+    assert owner == 'dns.svc'
+
+
+def test_bind_split_endpoint_publishes_nested_dns_record():
+    bind = object.__new__(bindinstance.BindInstance)
+    bind.api = MagicMock()
+    address = FakeAddress('10.0.1.53', 4)
+
+    with patch.object(
+            bindinstance, 'find_forward_zone',
+            return_value=('example.test.', 'dns.svc')), \
+            patch.object(bindinstance, 'add_fwd_rr') as add_fwd, \
+            patch.object(bindinstance, 'find_reverse_zone', return_value=None):
+        bind._BindInstance__add_master_records(
+            'dns.svc.example.test', [address])
+
+    add_fwd.assert_called_once_with(
+        'example.test.', 'dns.svc', address, bind.api)
+
+
+def test_ipa_ca_uses_local_directory_endpoint_addresses():
+    records = object.__new__(dns_data_management.IPASystemRecords)
+    records.domain_abs = bindinstance.DNSName('example.test.')
+    records.api_instance = MagicMock()
+    records.api_instance.env.host = 'ipa.svc.example.test'
+    records.api_instance.env.ipa_ipv4_address = '10.0.0.10'
+    records.api_instance.env.ipa_ipv6_address = '2001:db8:1::10'
+    zone_obj = dns_data_management.zone.Zone(
+        records.domain_abs, relativize=False)
+
+    with patch.object(
+            dns_data_management.installutils,
+            'resolve_rrsets_nss') as resolve:
+        records._IPASystemRecords__add_ca_records_from_hostname(
+            zone_obj, bindinstance.DNSName('ipa.svc.example.test.'))
+
+    text = zone_obj.to_text()
+    assert 'ipa-ca.example.test. 3600 IN A 10.0.0.10' in text
+    assert 'ipa-ca.example.test. 3600 IN AAAA 2001:db8:1::10' in text
+    resolve.assert_not_called()
 
 
 def test_bind_split_endpoint_uses_dns_runtime_identity():

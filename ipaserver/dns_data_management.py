@@ -189,6 +189,26 @@ class IPASystemRecords:
     def __add_ca_records_from_hostname(self, zone_obj, hostname):
         assert isinstance(hostname, DNSName) and hostname.is_absolute()
         r_name = DNSName(IPA_CA_RECORD) + self.domain_abs
+
+        local_hostname = getattr(self.api_instance.env, 'host', None)
+        if local_hostname and hostname == DNSName(local_hostname).make_absolute():
+            local_addresses = (
+                ('ipa_ipv4_address', rdatatype.A),
+                ('ipa_ipv6_address', rdatatype.AAAA),
+            )
+            found_local_address = False
+            for attr, rdtype in local_addresses:
+                value = getattr(self.api_instance.env, attr, None)
+                if not value:
+                    continue
+                found_local_address = True
+                rd = rdata.from_text(rdataclass.IN, rdtype, unicode(value))
+                rdataset = zone_obj.get_rdataset(
+                    r_name, rdtype, create=True)
+                rdataset.add(rd, ttl=self.TTL)
+            if found_local_address:
+                return
+
         rrsets = None
         end_time = time() + CA_RECORDS_DNS_TIMEOUT
         while True:
