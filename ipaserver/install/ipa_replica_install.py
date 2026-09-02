@@ -7,6 +7,7 @@ from __future__ import absolute_import
 from ipapython.install import cli
 from ipapython.install.core import knob, extend_knob
 from ipaplatform.paths import paths
+from ipaserver.install import installutils
 from ipaserver.install.server import ServerReplicaInstall
 
 
@@ -52,6 +53,14 @@ class CompatServerReplicaInstall(ServerReplicaInstall):
                     "multiple times",
     )
 
+    admin_password_file = knob(
+        str, None,
+        description=("Read the IPA admin password from an owner-only file "
+                     "instead of process arguments"),
+        cli_names='--admin-password-file',
+        cli_metavar='FILE',
+    )
+
     admin_password = ServerReplicaInstall.admin_password
     admin_password = extend_knob(
         admin_password,
@@ -60,6 +69,8 @@ class CompatServerReplicaInstall(ServerReplicaInstall):
 
     @admin_password.default_getter
     def admin_password(self):
+        if self.admin_password_file:
+            return installutils.read_password_file(self.admin_password_file)
         if self.principal:
             return self.auto_password
 

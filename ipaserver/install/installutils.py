@@ -23,6 +23,7 @@ from __future__ import print_function
 
 import logging
 import socket
+import stat
 import getpass
 import gssapi
 import ldif
@@ -62,6 +63,35 @@ from ipaplatform.tasks import tasks
 
 
 logger = logging.getLogger(__name__)
+
+
+def read_password_file(filename):
+    """Read one secret from an owner-only regular file."""
+    try:
+        file_stat = os.stat(filename)
+    except OSError as e:
+        raise ValueError("Unable to read password file %s: %s" %
+                         (filename, e))
+
+    if not stat.S_ISREG(file_stat.st_mode):
+        raise ValueError("Password file %s is not a regular file" % filename)
+    if stat.S_IMODE(file_stat.st_mode) & 0o077:
+        raise ValueError(
+            "Password file %s must not be accessible by group or others" %
+            filename)
+
+    try:
+        with open(filename, encoding='utf-8') as password_file:
+            value = password_file.read()
+    except OSError as e:
+        raise ValueError("Unable to read password file %s: %s" %
+                         (filename, e))
+
+    value = value.rstrip('\r\n')
+    if not value or '\n' in value or '\r' in value:
+        raise ValueError("Password file %s must contain exactly one secret" %
+                         filename)
+    return value
 
 
 class BadHostError(Exception):

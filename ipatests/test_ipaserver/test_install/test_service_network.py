@@ -118,6 +118,27 @@ def test_add_record_to_hosts_is_idempotent(tmp_path):
     assert hosts.read_text().count('10.0.0.10\tipa.example.test ipa\n') == 1
 
 
+def test_read_password_file_requires_owner_only_regular_file(tmp_path):
+    password_file = tmp_path / 'password'
+    password_file.write_text('Secret123\n')
+    password_file.chmod(0o600)
+
+    assert installutils.read_password_file(str(password_file)) == 'Secret123'
+
+    password_file.chmod(0o640)
+    with pytest.raises(ValueError, match='group or others'):
+        installutils.read_password_file(str(password_file))
+
+
+def test_read_password_file_requires_one_secret(tmp_path):
+    password_file = tmp_path / 'password'
+    password_file.write_text('first\nsecond\n')
+    password_file.chmod(0o600)
+
+    with pytest.raises(ValueError, match='exactly one secret'):
+        installutils.read_password_file(str(password_file))
+
+
 def test_ds_split_listener_restart_skips_localhost_port_probe():
     ds = object.__new__(dsinstance.DsInstance)
     ds.fqdn = 'ipa.example.test'
