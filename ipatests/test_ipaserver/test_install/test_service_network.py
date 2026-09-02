@@ -11,7 +11,7 @@ from ipaserver.install import (
     adtrustinstance, bindinstance, cainstance, dsinstance, hostidentity,
     httpinstance, installutils, service,
 )
-from ipaserver.install.server import replicainstall
+from ipaserver.install.server import replicainstall, upgrade as server_upgrade
 
 
 class FakeAddress:
@@ -379,6 +379,45 @@ def test_replica_schedules_clean_restart_after_post_import_setup():
     restart = ds.step.call_args_list[-1].args[1]
     assert restart.__func__ is dsinstance.DsInstance._DsInstance__restart_instance
     ds.start_creation.assert_called_once_with(runtime=30)
+
+
+def test_split_upgrade_pins_local_ca_to_directory_identity():
+    ca = MagicMock()
+    ca.is_configured.return_value = True
+
+    with patch.object(server_upgrade.cainstance, 'update_ipa_conf') as update:
+        changed = server_upgrade._pin_split_local_ca_host_on_upgrade(
+            True, 'ipa.example.test', 'master.example.test', ca)
+
+    assert changed is True
+    update.assert_called_once_with('ipa.example.test')
+
+
+def test_split_upgrade_keeps_remote_ca_on_ca_less_replica():
+    ca = MagicMock()
+    ca.is_configured.return_value = False
+
+    with patch.object(server_upgrade.cainstance, 'update_ipa_conf') as update:
+        changed = server_upgrade._pin_split_local_ca_host_on_upgrade(
+            True, 'ipa.example.test', 'master.example.test', ca)
+
+    assert changed is False
+    update.assert_not_called()
+
+
+def test_split_upgrade_local_ca_pin_is_idempotent_and_split_only():
+    ca = MagicMock()
+    ca.is_configured.return_value = True
+
+    with patch.object(server_upgrade.cainstance, 'update_ipa_conf') as update:
+        already_local = server_upgrade._pin_split_local_ca_host_on_upgrade(
+            True, 'ipa.example.test', 'ipa.example.test', ca)
+        integrated = server_upgrade._pin_split_local_ca_host_on_upgrade(
+            False, 'ipa.example.test', 'master.example.test', ca)
+
+    assert already_local is False
+    assert integrated is False
+    update.assert_not_called()
 
 
 def test_ca_replica_schedules_restart_after_ipaca_import():

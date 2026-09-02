@@ -1651,6 +1651,18 @@ def ca_update_acme_configuration(ca, fqdn):
                                   template_name))
 
 
+def _pin_split_local_ca_host_on_upgrade(
+        split_directory, ipa_hostname, current_ca_host, ca):
+    """Pin a split server's local CA to its Directory service identity."""
+    if (not split_directory or not ca.is_configured() or
+            current_ca_host == ipa_hostname):
+        return False
+
+    logger.info('[Pinning local CA host to split Directory identity]')
+    cainstance.update_ipa_conf(ipa_hostname)
+    return True
+
+
 def set_default_grace_time():
     dn = DN(
         ('cn', 'global_policy'), ('cn', api.env.realm),
@@ -1748,6 +1760,8 @@ def upgrade_configuration():
 
     ca = cainstance.CAInstance(
             api.env.realm, host_name=api.env.host)
+    _pin_split_local_ca_host_on_upgrade(
+        split_directory, fqdn, api.env.ca_host, ca)
     ca_running = ca.is_running()
 
     kra = krainstance.KRAInstance(api.env.realm)
