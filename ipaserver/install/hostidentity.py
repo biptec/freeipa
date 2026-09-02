@@ -287,6 +287,16 @@ def _persist_hostnames(ipa_hostname, system_hostname, fstore=None):
     )
 
 
+def _pin_local_ca_host(ipa_hostname):
+    """Keep local Dogtag operations on the canonical IPA service identity."""
+    # Local import avoids pulling CA installation machinery into callers that
+    # only use the generic host-identity helpers.
+    from ipaserver.install import cainstance
+
+    if cainstance.is_ca_installed_locally():
+        cainstance.update_ipa_conf(ipa_hostname)
+
+
 def _set_sssd_hostname(system_hostname, expected_hostname=None):
     sssdconfig = SSSDConfig.SSSDConfig()
     sssdconfig.import_config()
@@ -408,6 +418,7 @@ def finalize_machine_identity(
             system_hostname, realm, api_instance.env.domain)
         _persist_hostnames(ipa_hostname, system_hostname, fstore=fstore)
         config_changed = True
+        _pin_local_ca_host(ipa_hostname)
 
         directory_addresses = [
             value for value in (

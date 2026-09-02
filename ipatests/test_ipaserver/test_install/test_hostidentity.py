@@ -76,6 +76,7 @@ def test_finalize_machine_identity_success():
             patch.object(hostidentity, '_set_sssd_hostname') as sssd, \
             patch.object(hostidentity, '_set_krb5_machine_mapping') as krbmap, \
             patch.object(hostidentity, '_persist_hostnames') as persist, \
+            patch.object(hostidentity, '_pin_local_ca_host') as pin_ca, \
             patch.object(hostidentity.tasks, 'set_hostname') as set_hostname, \
             patch.object(hostidentity, 'verify_machine_identity') as verify:
         hostidentity.finalize_machine_identity(
@@ -91,8 +92,23 @@ def test_finalize_machine_identity_success():
     krbmap.assert_called_once_with(
         SYSTEM_HOST, REALM, api_instance.env.domain)
     persist.assert_called_once()
+    pin_ca.assert_called_once_with(IPA_HOST)
     set_hostname.assert_called_once_with(SYSTEM_HOST)
     verify.assert_called_once()
+
+
+def test_pin_local_ca_host_only_updates_local_ca():
+    with patch('ipaserver.install.cainstance.is_ca_installed_locally',
+               return_value=True), \
+            patch('ipaserver.install.cainstance.update_ipa_conf') as update:
+        hostidentity._pin_local_ca_host(IPA_HOST)
+    update.assert_called_once_with(IPA_HOST)
+
+    with patch('ipaserver.install.cainstance.is_ca_installed_locally',
+               return_value=False), \
+            patch('ipaserver.install.cainstance.update_ipa_conf') as update:
+        hostidentity._pin_local_ca_host(IPA_HOST)
+    update.assert_not_called()
 
 
 def test_finalize_machine_identity_rolls_back_on_failure():
