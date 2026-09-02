@@ -429,6 +429,14 @@ class CAInstance(DogtagInstance):
                 self.step("ignore time skew for initial replication",
                           self.replica_ignore_initial_time_skew)
                 self.step("setting up initial replication", self.__setup_replication)
+                # CA promotion initializes o=ipaca online. As with the main
+                # IPA suffix, restart 389-DS immediately after the import so
+                # the post-import backend state and changelog are rebuilt
+                # before Dogtag creates additional local CA data.
+                self.step(
+                    "stabilizing CA directory server after initial replication",
+                    installutils.restart_dirsrv,
+                )
                 self.step("revert time skew after initial replication",
                           self.replica_revert_time_skew)
                 self.step("creating ACIs for admin", self.add_ipaca_aci)

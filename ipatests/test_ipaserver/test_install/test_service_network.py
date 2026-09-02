@@ -8,8 +8,8 @@ from ipapython.dn import DN
 
 from ipaserver import dns_data_management
 from ipaserver.install import (
-    adtrustinstance, bindinstance, dsinstance, hostidentity, httpinstance,
-    installutils, service,
+    adtrustinstance, bindinstance, cainstance, dsinstance, hostidentity,
+    httpinstance, installutils, service,
 )
 from ipaserver.install.server import replicainstall
 
@@ -379,6 +379,36 @@ def test_replica_schedules_clean_restart_after_post_import_setup():
     restart = ds.step.call_args_list[-1].args[1]
     assert restart.__func__ is dsinstance.DsInstance._DsInstance__restart_instance
     ds.start_creation.assert_called_once_with(runtime=30)
+
+
+def test_ca_replica_schedules_restart_after_ipaca_import():
+    ca = object.__new__(cainstance.CAInstance)
+    ca.realm = 'EXAMPLE.TEST'
+    ca.external = 0
+    ca.clone = False
+    ca.step = MagicMock()
+    ca.start_creation = MagicMock()
+    ca.clean_pkispawn_files = MagicMock()
+
+    with patch.object(cainstance, 'lookup_ldap_backend', return_value='bdb'), \
+            patch.object(cainstance, 'minimum_acme_support', return_value=False), \
+            patch.object(cainstance.os.path, 'exists', return_value=False):
+        ca.configure_instance(
+            'replica.example.test', 'dm-password', 'admin-password',
+            pkcs12_info=('clone.p12', 'pin'),
+            master_host='master.example.test',
+            promote=True,
+        )
+
+    labels = [call.args[0] for call in ca.step.call_args_list]
+    setup_index = labels.index('setting up initial replication')
+    assert labels[setup_index + 1] == (
+        'stabilizing CA directory server after initial replication')
+    restart = ca.step.call_args_list[setup_index + 1].args[1]
+    assert restart is installutils.restart_dirsrv
+    assert labels[setup_index + 2] == (
+        'revert time skew after initial replication')
+    ca.start_creation.assert_called_once_with(runtime=180)
 
 
 def test_late_split_service_creation_skips_missing_ipa_host():
