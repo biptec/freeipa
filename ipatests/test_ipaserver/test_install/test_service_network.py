@@ -9,7 +9,7 @@ from ipapython.dn import DN
 from ipaserver import dns_data_management
 from ipaserver.install import (
     adtrustinstance, bindinstance, dsinstance, hostidentity, httpinstance,
-    service,
+    installutils, service,
 )
 from ipaserver.install.server import replicainstall
 
@@ -91,6 +91,31 @@ def test_temporary_hosts_records_are_removed_exactly(tmp_path):
         '127.0.0.1 localhost\n'
         '10.0.0.20 other.example.test other\n'
     )
+
+
+def test_record_in_hosts_scans_all_alias_lines(tmp_path):
+    hosts = tmp_path / 'hosts'
+    hosts.write_text(
+        '10.0.0.10 other.example.test other\n'
+        '10.0.0.10 ipa.example.test ipa\n'
+    )
+
+    record = installutils.record_in_hosts(
+        '10.0.0.10', 'ipa.example.test', str(hosts))
+
+    assert record == ('10.0.0.10', ['ipa.example.test', 'ipa'])
+
+
+def test_add_record_to_hosts_is_idempotent(tmp_path):
+    hosts = tmp_path / 'hosts'
+    hosts.write_text('10.0.0.10\tipa.example.test ipa\n')
+
+    installutils.add_record_to_hosts(
+        '10.0.0.10', 'ipa.example.test', str(hosts))
+    installutils.add_record_to_hosts(
+        '10.0.0.10', 'ipa.example.test', str(hosts))
+
+    assert hosts.read_text().count('10.0.0.10\tipa.example.test ipa\n') == 1
 
 
 def test_ds_split_listener_restart_skips_localhost_port_probe():
@@ -292,6 +317,9 @@ def test_ds_split_bootstrap_generates_prestart_helper(tmp_path):
     assert 'ensure_host 10.0.0.10 ipa.example.test ipa' in helper_text
     assert 'ensure_host 2001:db8:1::10 ipa.example.test ipa' in helper_text
     assert 'ensure_host 10.0.1.53 dns.example.test dns' in helper_text
+    assert 'verify_unique_host 10.0.0.10 ipa.example.test' in helper_text
+    assert 'verify_unique_host 2001:db8:1::10 ipa.example.test' in helper_text
+    assert 'verify_unique_host 10.0.1.53 dns.example.test' in helper_text
     assert 'wait_address 10.0.0.10' in helper_text
     assert 'wait_address 2001:db8:1::10' in helper_text
     assert 'ReadWritePaths=/etc/hosts' in dropin_text

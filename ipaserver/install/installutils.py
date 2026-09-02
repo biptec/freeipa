@@ -246,8 +246,10 @@ def record_in_hosts(ip, host_name=None, conf_file=paths.HOSTS):
             if host_name is not None:
                 if host_name in names:
                     return (hosts_ip, names)
-                else:
-                    return None
+                # The same address may legitimately have another alias on an
+                # earlier line. Keep scanning instead of treating that line as
+                # proof that the requested host name is absent.
+                continue
             return (hosts_ip, names)
         except IndexError:
             print("Warning: Erroneous line '%s' in %s" % (line, conf_file))
@@ -256,6 +258,9 @@ def record_in_hosts(ip, host_name=None, conf_file=paths.HOSTS):
     return None
 
 def add_record_to_hosts(ip, host_name, conf_file=paths.HOSTS):
+    if record_in_hosts(ip, host_name, conf_file) is not None:
+        return
+
     hosts_fd = open(conf_file, 'r+')
     hosts_fd.seek(0, 2)
     hosts_fd.write(ip+'\t'+host_name+' '+host_name.split('.')[0]+'\n')

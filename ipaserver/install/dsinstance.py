@@ -276,6 +276,17 @@ class DsInstance(service.Service):
             '    fi',
             '}',
             '',
+            'verify_unique_host() {',
+            '    address=$1',
+            '    hostname=$2',
+            '    count=$(getent ahosts "$hostname" | awk -v address="$address" ',
+            "        '$1 == address \u0026\u0026 $2 == \"STREAM\" { count += 1 } END { print count + 0 }')",
+            '    if [ "$count" -ne 1 ]; then',
+            '        echo "Service hostname $hostname resolves $address $count times" >&2',
+            '        return 1',
+            '    fi',
+            '}',
+            '',
             'wait_address() {',
             '    address=$1',
             '    attempt=0',
@@ -296,6 +307,9 @@ class DsInstance(service.Service):
             lines.append('ensure_host {0} {1} {2}'.format(
                 shlex.quote(address), shlex.quote(hostname),
                 shlex.quote(shortname)))
+        for address, hostname in records:
+            lines.append('verify_unique_host {0} {1}'.format(
+                shlex.quote(address), shlex.quote(hostname)))
         lines.extend((
             '',
             'wait_address {0}'.format(shlex.quote(str(ipv4))),
