@@ -65,7 +65,7 @@ biptec/release/verify-source.sh
 biptec/release/export-patches.sh /tmp/biptec-patches
 ```
 
-Для текущей 4.13.3 должны получиться десять файлов с номерами `9001`–`9010`.
+Для текущей 4.13.3 должны получиться одиннадцать файлов с номерами `9001`–`9011`.
 High patch numbers выбраны намеренно: Fedora downstream patches применяются первыми, BIPTEC patches — после них.
 
 ## 5. Fedora packaging
