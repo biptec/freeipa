@@ -14,7 +14,7 @@ BIPTEC FreeIPA является постоянным downstream fork. Upstream c
 - Production никогда не устанавливается из произвольного branch HEAD.
 
 Для 4.13.3 базой является upstream `release-4-13-3`.
-Release-ветка содержит пять логических source patches, перенесённых с 4.13.2; `git range-diff` подтверждает их эквивалентность.
+Release-ветка содержит восемь логических source patches: пять исходных BIPTEC patches, перенесённых с 4.13.2, и три исправления, найденных при 4.13.3 lab acceptance.
 
 ## 2. Что считается релизом
 
@@ -65,7 +65,7 @@ biptec/release/verify-source.sh
 biptec/release/export-patches.sh /tmp/biptec-patches
 ```
 
-Для текущей 4.13.3 должны получиться пять файлов с номерами `9001`–`9005`.
+Для текущей 4.13.3 должны получиться восемь файлов с номерами `9001`–`9008`.
 High patch numbers выбраны намеренно: Fedora downstream patches применяются первыми, BIPTEC patches — после них.
 
 ## 5. Fedora packaging
