@@ -537,6 +537,13 @@ class DsInstance(service.Service):
         self.step("enabling S4U2Proxy delegation", self.__setup_s4u2proxy)
 
         self.__common_post_setup()
+        # 389-ds marks a backend as post-import after online replica
+        # initialization. The first full restart consumes that state and lets
+        # post-import plugins reconcile their runtime data. Start the replica
+        # once more before KDC setup so KDB lookups run against a normal,
+        # fully settled backend rather than the transient post-import state.
+        self.step("stabilizing directory server after initial replication",
+                  self.__restart_instance)
 
         self.start_creation(runtime=30)
 

@@ -354,6 +354,33 @@ def test_ds_split_bootstrap_generates_prestart_helper(tmp_path):
     tasks_mock.systemd_daemon_reload.assert_called_once_with()
 
 
+def test_replica_schedules_clean_restart_after_post_import_setup():
+    ds = object.__new__(dsinstance.DsInstance)
+    ds.step = MagicMock()
+    ds.start_creation = MagicMock()
+
+    with patch.object(dsinstance.DsInstance, 'init_info'), \
+            patch.object(
+                dsinstance.DsInstance,
+                '_DsInstance__common_setup'), \
+            patch.object(
+                dsinstance.DsInstance,
+                '_DsInstance__common_post_setup'):
+        ds.create_replica(
+            'EXAMPLE.TEST', 'master.example.test', 'replica.example.test',
+            'example.test', 'dm-password', DN(('o', 'EXAMPLE.TEST')),
+            DN(('cn', 'Certificate Authority'), ('o', 'EXAMPLE.TEST')),
+            MagicMock(),
+        )
+
+    labels = [call.args[0] for call in ds.step.call_args_list]
+    assert labels[-1] == (
+        'stabilizing directory server after initial replication')
+    restart = ds.step.call_args_list[-1].args[1]
+    assert restart.__func__ is dsinstance.DsInstance._DsInstance__restart_instance
+    ds.start_creation.assert_called_once_with(runtime=30)
+
+
 def test_late_split_service_creation_skips_missing_ipa_host():
     svc = object.__new__(service.Service)
     svc.fqdn = 'ipa.example.test'
