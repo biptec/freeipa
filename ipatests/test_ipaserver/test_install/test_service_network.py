@@ -341,6 +341,10 @@ def test_ds_split_bootstrap_generates_prestart_helper(tmp_path):
     assert 'verify_unique_host 10.0.0.10 ipa.example.test' in helper_text
     assert 'verify_unique_host 2001:db8:1::10 ipa.example.test' in helper_text
     assert 'verify_unique_host 10.0.1.53 dns.example.test' in helper_text
+    assert ('count=$(getent ahosts "$hostname" | awk -v address="$address" '
+            "        '$1 == address && $2 == \"STREAM\" { count += 1 } "
+            "END { print count + 0 }')") in helper_text
+    assert 'address="$address" \n' not in helper_text
     assert 'wait_address 10.0.0.10' in helper_text
     assert 'wait_address 2001:db8:1::10' in helper_text
     assert 'ReadWritePaths=/etc/hosts' in dropin_text

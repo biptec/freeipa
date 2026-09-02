@@ -279,7 +279,7 @@ class DsInstance(service.Service):
             'verify_unique_host() {',
             '    address=$1',
             '    hostname=$2',
-            '    count=$(getent ahosts "$hostname" | awk -v address="$address" ',
+            '    count=$(getent ahosts "$hostname" | awk -v address="$address" '
             "        '$1 == address \u0026\u0026 $2 == \"STREAM\" { count += 1 } END { print count + 0 }')",
             '    if [ "$count" -ne 1 ]; then',
             '        echo "Service hostname $hostname resolves $address $count times" >&2',
