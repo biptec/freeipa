@@ -1,6 +1,7 @@
 #
 # Copyright (C) 2026  FreeIPA Contributors.  See COPYING for license
 #
+from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
 from ipalib import errors
@@ -12,6 +13,16 @@ from ipaserver.install import (
     httpinstance, installutils, service,
 )
 from ipaserver.install.server import replicainstall, upgrade as server_upgrade
+
+
+def test_replica_manage_defaults_to_split_ipa_host():
+    source = (
+        Path(__file__).resolve().parents[4]
+        / 'install' / 'tools' / 'ipa-replica-manage.in'
+    ).read_text()
+
+    assert 'host = api.env.host' in source
+    assert 'from ipalib.constants import FQDN' not in source
 
 
 class FakeAddress:
