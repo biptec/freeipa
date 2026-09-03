@@ -47,8 +47,10 @@ PATCH_TAR="freeipa-${VERSION_ID}-patches.tar.gz"
 
 tar -C "$OUT" -czf "$OUT/$REPO_TAR" repo
 tar -C "$PATCH_DIR" -czf "$OUT/$PATCH_TAR" .
+cp "$ROOT/BIPTEC-RELEASE" "$OUT/BIPTEC-RELEASE"
 cat > "$OUT/BUILD-METADATA.txt" <<EOF
 BIPTEC FreeIPA build
+release_metadata_format=$FORMAT
 source_commit=$(git rev-parse HEAD)
 source_tree=$(git rev-parse "$PATCH_HEAD^{tree}")
 upstream_tag=$UPSTREAM_TAG
@@ -57,7 +59,11 @@ fedora_branch=$FEDORA_BRANCH
 fedora_distgit_commit=$FEDORA_DISTGIT_COMMIT
 package_version=$PACKAGE_VERSION
 package_release=$FEDORA_PACKAGE_RELEASE.$RELEASE_REVISION.fc$TARGET_FEDORA
+patch_base=$PATCH_BASE
+patch_head=$PATCH_HEAD
 patch_count=$PATCH_COUNT
+validated_tree=$VALIDATED_TREE
+validated_development_head=$VALIDATED_DEVELOPMENT_HEAD
 target_arch=$TARGET_ARCH
 EOF
 
@@ -72,7 +78,7 @@ EOF
 
 (
     cd "$OUT"
-    sha256sum "$REPO_TAR" "$PATCH_TAR" BUILD-METADATA.txt README-INSTALL.txt > SHA256SUMS
+    sha256sum "$REPO_TAR" "$PATCH_TAR" BIPTEC-RELEASE BUILD-METADATA.txt README-INSTALL.txt > SHA256SUMS
 )
 
 rpm -qp --qf '%{NAME} %{VERSION}-%{RELEASE} %{ARCH}\n' "$OUT/rpms"/*.rpm | sort > "$OUT/RPM-MANIFEST.txt"

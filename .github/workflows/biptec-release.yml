@@ -76,6 +76,7 @@ jobs:
             dist/biptec-release/*-patches.tar.gz \
             dist/biptec-release/srpm/*.src.rpm \
             dist/biptec-release/SHA256SUMS \
+            dist/biptec-release/BIPTEC-RELEASE \
             dist/biptec-release/BUILD-METADATA.txt \
             dist/biptec-release/RPM-MANIFEST.txt \
             dist/biptec-release/README-INSTALL.txt \
