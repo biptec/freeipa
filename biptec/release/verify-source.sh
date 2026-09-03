@@ -3,12 +3,12 @@ set -euo pipefail
 
 ROOT=$(git rev-parse --show-toplevel)
 cd "$ROOT"
+"$ROOT/biptec/release/verify-release-metadata.sh"
 # shellcheck disable=SC1091
 source "$ROOT/BIPTEC-RELEASE"
 
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
-[[ "$FORMAT" == "1" ]] || fail "unsupported BIPTEC-RELEASE format"
 [[ "$(git rev-parse "$UPSTREAM_TAG^{}")" == "$UPSTREAM_COMMIT" ]] || fail "upstream tag mismatch"
 [[ "$(git rev-parse "$PATCH_BASE")" == "$UPSTREAM_COMMIT" ]] || fail "patch base mismatch"
 git merge-base --is-ancestor "$PATCH_BASE" "$PATCH_HEAD" || fail "patch head is not based on upstream"
