@@ -4,7 +4,10 @@
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
 
+import pytest
+
 from ipalib import errors
+from ipapython.admintool import ScriptError
 from ipapython.dn import DN
 
 from ipaserver import dns_data_management
@@ -574,10 +577,50 @@ def test_split_dns_records_add_only_missing_addresses():
         FakeAddress('2001:db8::11', 6),
     ]
 
-    added = replicainstall._ensure_split_dns_records(
-        remote_api, 'example.test', 'dc2.example.test', addresses)
+    with patch.object(
+            replicainstall.bindinstance, 'find_forward_zone',
+            return_value=('example.test.', 'dc2')):
+        added = replicainstall._ensure_split_dns_records(
+            remote_api, 'example.test', 'dc2.example.test', addresses)
 
     remote_api.Command.dnsrecord_add.assert_called_once_with(
         'example.test', 'dc2', aaaarecord='2001:db8::11')
     assert added == [
         ('example.test', 'dc2', 'aaaarecord', '2001:db8::11')]
+
+
+def test_split_dns_records_use_most_specific_managed_zone():
+    remote_api = MagicMock()
+    remote_api.Command.dnsrecord_show.return_value = {'result': {}}
+    addresses = [
+        FakeAddress('10.0.0.12', 4),
+        FakeAddress('2001:db8::12', 6),
+    ]
+
+    with patch.object(
+            replicainstall.bindinstance, 'find_forward_zone',
+            return_value=('svc.example.test.', 'pollux')) as find_zone:
+        added = replicainstall._ensure_split_dns_records(
+            remote_api, 'example.test', 'pollux.svc.example.test', addresses)
+
+    find_zone.assert_called_once_with(
+        'pollux.svc.example.test', api=remote_api)
+    assert remote_api.Command.dnsrecord_add.call_args_list == [
+        call('svc.example.test', 'pollux', arecord='10.0.0.12'),
+        call('svc.example.test', 'pollux', aaaarecord='2001:db8::12'),
+    ]
+    assert added == [
+        ('svc.example.test', 'pollux', 'arecord', '10.0.0.12'),
+        ('svc.example.test', 'pollux', 'aaaarecord', '2001:db8::12'),
+    ]
+
+
+def test_split_dns_records_require_managed_forward_zone():
+    remote_api = MagicMock()
+    with patch.object(
+            replicainstall.bindinstance, 'find_forward_zone',
+            return_value=(None, None)):
+        with pytest.raises(ScriptError, match='No IPA-managed forward DNS zone'):
+            replicainstall._ensure_split_dns_records(
+                remote_api, 'example.test', 'pollux.svc.example.test',
+                [FakeAddress('10.0.0.12', 4)])

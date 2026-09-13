@@ -863,7 +863,18 @@ def _split_dns_name(hostname, domain):
 
 def _ensure_split_dns_records(remote_api, domain, hostname, addresses):
     """Publish missing Directory A/AAAA records before replica conncheck."""
-    zone, name = _split_dns_name(hostname, domain)
+    # Split-hostname deployments may place the Directory identity below a
+    # delegated IPA-managed child zone (for example svc.example.test) rather
+    # than directly below the IPA domain.  Publishing the bootstrap records in
+    # the parent zone would be shadowed by that delegation and the source
+    # master could not resolve the future replica during conncheck.  Use the
+    # same most-specific-zone lookup as the normal BIND record path.
+    zone, name = bindinstance.find_forward_zone(hostname, api=remote_api)
+    if zone is None:
+        raise ScriptError(
+            'No IPA-managed forward DNS zone contains --ipa-hostname {0}'
+            .format(hostname))
+    zone = str(zone).rstrip('.')
     try:
         entry = remote_api.Command.dnsrecord_show(
             unicode(zone), unicode(name), all=True)['result']
