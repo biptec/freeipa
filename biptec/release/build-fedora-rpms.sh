@@ -13,7 +13,12 @@ PATCH_DIR="$WORK/patches"
 RPMTOP="$WORK/rpmbuild"
 
 rm -rf "$OUT" "$WORK"
+umask 0022
 mkdir -p "$OUT" "$WORK" "$RPMTOP"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+"$ROOT/biptec/release/normalize-build-tree-modes.sh" \
+    "$OUT" "$WORK" "$RPMTOP" \
+    "$RPMTOP/BUILD" "$RPMTOP/BUILDROOT" "$RPMTOP/RPMS" \
+    "$RPMTOP/SOURCES" "$RPMTOP/SPECS" "$RPMTOP/SRPMS"
 
 "$ROOT/biptec/release/verify-source.sh"
 "$ROOT/biptec/release/export-patches.sh" "$PATCH_DIR"
