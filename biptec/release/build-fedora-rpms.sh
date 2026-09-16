@@ -12,8 +12,21 @@ DISTGIT="$WORK/freeipa-distgit"
 PATCH_DIR="$WORK/patches"
 RPMTOP="$WORK/rpmbuild"
 
+run_dnf() {
+    if (( EUID == 0 )); then
+        dnf "$@"
+    else
+        sudo -n dnf "$@"
+    fi
+}
+
 rm -rf "$OUT" "$WORK"
+umask 0022
 mkdir -p "$OUT" "$WORK" "$RPMTOP"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+"$ROOT/biptec/release/normalize-build-tree-modes.sh" \
+    "$OUT" "$WORK" "$RPMTOP" \
+    "$RPMTOP/BUILD" "$RPMTOP/BUILDROOT" "$RPMTOP/RPMS" \
+    "$RPMTOP/SOURCES" "$RPMTOP/SPECS" "$RPMTOP/SRPMS"
 
 "$ROOT/biptec/release/verify-source.sh"
 "$ROOT/biptec/release/export-patches.sh" "$PATCH_DIR"
@@ -25,7 +38,7 @@ git -C "$DISTGIT" checkout --quiet "$FEDORA_DISTGIT_COMMIT"
     fedpkg sources
 )
 "$ROOT/biptec/release/prepare-distgit.sh" "$DISTGIT" "$PATCH_DIR"
-dnf -y builddep "$DISTGIT/freeipa.spec"
+run_dnf -y builddep "$DISTGIT/freeipa.spec"
 
 cp "$DISTGIT"/* "$RPMTOP/SOURCES/" 2>/dev/null || true
 cp "$DISTGIT/freeipa.spec" "$RPMTOP/SPECS/freeipa.spec"

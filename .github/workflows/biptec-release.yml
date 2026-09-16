@@ -44,6 +44,9 @@ jobs:
       - name: Verify downstream source
         run: biptec/release/verify-source.sh
 
+      - name: Test release build-tree mode normalization
+        run: biptec/release/test-build-tree-modes.sh
+
       - name: Build Fedora RPMs and repository bundle
         run: biptec/release/build-fedora-rpms.sh "$GITHUB_WORKSPACE/dist/biptec-release"
 
